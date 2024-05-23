@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"luago/binary"
+	"luago/vm"
 )
 
 func main() {
@@ -28,6 +29,8 @@ func list(proto *binary.Prototype) {
 		varargFlag = "+"
 	}
 
+	spaces := "        "
+
 	fmt.Printf("\n%s <%s:%d.%d> (%d instructions)\n", funcType, proto.Source, proto.LineBegin, proto.LineEnd, len(proto.Code))
 	fmt.Printf("%d%s params, %d slots, %d upvalues, %d locals, %d constants, %d functions\n", proto.NumParams, varargFlag, proto.MaxStackSize, len(proto.Upvalues), len(proto.LocVars), len(proto.Constants), len(proto.Protos))
 	for i, c := range proto.Code {
@@ -35,7 +38,48 @@ func list(proto *binary.Prototype) {
 		if len(proto.LineInfo) > 0 {
 			line = fmt.Sprintf("%d", proto.LineInfo[i])
 		}
-		fmt.Printf("\t%d\t[%s]\t0x%08X\n", i + 1, line, c)
+
+		inst := vm.Instruction(c)
+		name := inst.Name()
+
+
+		fmt.Printf("\t%d\t[%s]\t%s%s\t", i + 1, line, name, spaces[len(name):])
+
+		switch inst.Mode() {
+		case vm.IABC:
+			a, b, c := inst.ABC()
+			fmt.Printf("%d", a)
+			if inst.BMode() != vm.OpArgN {
+				if b > 0xff {
+					fmt.Printf(" %d", -1 - (b & 0xff))
+				} else {
+					fmt.Printf(" %d", b)
+				}
+			}
+			if inst.CMode() != vm.OpArgN {
+				if c > 0xff {
+					fmt.Printf(" %d", -1 - (c & 0xff))
+				} else {
+					fmt.Printf(" %d", c)
+				}
+			}
+		case vm.IABx:
+			a, bx := inst.ABx()
+			fmt.Printf("%d", a)
+			if inst.BMode() == vm.OpArgK {
+				fmt.Printf(" %d", -1 - bx)
+			} else if inst.BMode() == vm.OpArgU {
+				fmt.Printf(" %d", bx)
+			}
+		case vm.IAsBx:
+			a, sbx := inst.AsBx()
+			fmt.Printf("%d %d", a, sbx)
+		case vm.IAx:
+			ax := inst.Ax()
+			fmt.Printf("%d", -1 - ax)
+		}
+
+		fmt.Println()
 	}
 	
 	fmt.Printf("constants (%d):\n", len(proto.Constants))
