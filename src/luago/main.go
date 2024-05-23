@@ -9,24 +9,26 @@ import (
 func main() {
 	ls := state.New()
 
-	ls.PushBoolean(true)
-	printStack(ls) // [true]
-	ls.PushInteger(10)
-	printStack(ls) // [true][10]
-	ls.PushNil()
-	printStack(ls) // [true][10][nil]
-	ls.PushString("hello")
-	printStack(ls) // [true][10][nil]["hello"]
-	ls.PushValue(-4)
-	printStack(ls) // [true][10][nil]["hello"][true]
-	ls.Replace(3)
-	printStack(ls) // [true][10][true]["hello"]
-	ls.SetTop(6)
-	printStack(ls) // [true][10][true]["hello"][nil][nil]
-	ls.Remove(-3)
-	printStack(ls) // [true][10][true][nil][nil]
-	ls.SetTop(-5)
-	printStack(ls) // [true]
+	ls.PushInteger(1)
+	ls.PushString("2.0")
+	ls.PushString("3.0")
+	ls.PushNumber(4.0)
+	printStack(ls) // [1]["2.0"]["3.0"][4]
+
+	ls.Arith(api.LUA_OPADD)
+	printStack(ls) // [1]["2.0"][7]
+
+	ls.Arith(api.LUA_OPBNOT)
+	printStack(ls) // [1]["2.0"][-8]
+
+	ls.Len(2)
+	printStack(ls) // [1]["2.0"][-8][3]
+
+	ls.Concat(3)
+	printStack(ls) // [1]["2.0-83"]
+
+	ls.PushBoolean(ls.Compare(1, 2, api.LUA_OPEQ))
+	printStack(ls) // [1]["2.0-83"][false]
 }
 
 func printStack(ls api.LuaState) {

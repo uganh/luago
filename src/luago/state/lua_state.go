@@ -3,6 +3,9 @@ package state
 import (
 	"fmt"
 	"luago/api"
+	"luago/number"
+	"math"
+	"strings"
 )
 
 type luaState struct {
@@ -134,7 +137,7 @@ func (state *luaState) IsNumber(idx int) bool {
 
 func (state *luaState) IsString(idx int) bool {
 	t := state.Type(idx)
-	return t == api.LUA_TNIL || t == api.LUA_TNUMBER
+	return t == api.LUA_TSTRING || t == api.LUA_TNUMBER
 }
 
 func (state *luaState) ToBoolean(idx int) bool {
@@ -152,9 +155,7 @@ func (state *luaState) ToInteger(idx int) int64 {
 }
 
 func (state *luaState) ToIntegerX(idx int) (int64, bool) {
-	val := state.stack.get(idx)
-	i, ok := val.(int64)
-	return i, ok
+	return convertToInteger(state.stack.get(idx))
 }
 
 func (state *luaState) ToNumber(idx int) float64 {
@@ -163,12 +164,7 @@ func (state *luaState) ToNumber(idx int) float64 {
 }
 
 func (state *luaState) ToNumberX(idx int) (float64, bool) {
-	val := state.stack.get(idx)
-	switch x := val.(type) {
-	case float64: return x, true
-	case int64: return float64(x), true
-	default: return 0, false
-	}
+	return convertToFloat(state.stack.get(idx))
 }
 
 func (state *luaState) ToString(idx int) string {
@@ -206,4 +202,176 @@ func (state *luaState) PushNumber(n float64) {
 
 func (state *luaState) PushString(s string) {
 	state.stack.push(s)
+}
+
+func (state *luaState) Arith(op api.ArithOp) {
+	var a, b, r luaValue
+	b = state.stack.pop()
+	if op != api.LUA_OPUNM && op != api.LUA_OPBNOT {
+		a = state.stack.pop()
+	} else {
+		a = b
+	}
+
+	var iFunc func(int64, int64) int64
+	var fFunc func(float64, float64) float64
+
+	switch (op) {
+	case api.LUA_OPADD:
+		iFunc = func(a, b int64) int64 { return a + b }
+		fFunc = func(a, b float64) float64 { return a + b }
+	case api.LUA_OPSUB:
+		iFunc = func(a, b int64) int64 { return a - b }
+		fFunc = func(a, b float64) float64 { return a - b }
+	case api.LUA_OPMUL:
+		iFunc = func(a, b int64) int64 { return a * b }
+		fFunc = func(a, b float64) float64 { return a * b }
+	case api.LUA_OPMOD:
+		iFunc, fFunc = number.IMod, number.FMod
+	case api.LUA_OPPOW:
+		fFunc = math.Pow
+	case api.LUA_OPDIV:
+		fFunc = func(a, b float64) float64 { return a / b }
+	case api.LUA_OPIDIV:
+		iFunc, fFunc = number.IFloorDiv, number.FFloorDiv
+	case api.LUA_OPBAND:
+		iFunc = func(a, b int64) int64 { return a & b }
+	case api.LUA_OPBOR:
+		iFunc = func(a, b int64) int64 { return a | b }
+	case api.LUA_OPBXOR:
+		iFunc = func(a, b int64) int64 { return a ^ b }
+	case api.LUA_OPSHL:
+		iFunc = number.ShiftLeft
+	case api.LUA_OPSHR:
+		iFunc = number.ShiftRight
+	case api.LUA_OPUNM:
+		iFunc = func(a, _ int64) int64 { return -a }
+		fFunc = func(a, _ float64) float64 { return -a }
+	case api.LUA_OPBNOT:
+		iFunc = func(a, _ int64) int64 { return ^a }
+	}
+
+	if fFunc == nil { // bitwise operation
+		if a, ok := convertToInteger(a); ok {
+			if b, ok := convertToInteger(b); ok {
+				r = iFunc(a, b)
+			}
+		}
+	} else {
+		if iFunc != nil {
+			if a, ok := a.(int64); ok {
+				if b, ok := b.(int64); ok {
+					r = iFunc(a, b)
+					goto end
+				}
+			}
+		}
+
+		if a, ok := convertToFloat(a); ok {
+			if b, ok := convertToFloat(b); ok {
+				r = fFunc(a, b)
+			}
+		}
+	}
+
+end:
+	if r != nil {
+		state.stack.push(r);
+	} else {
+		panic("arithmetic error")
+	}
+}
+
+func (state *luaState) Compare(idx1, idx2 int, op api.CompareOp) bool {
+	a := state.stack.get(idx1)
+	b := state.stack.get(idx2)
+	switch op {
+	case api.LUA_OPEQ:
+		switch a := a.(type) {
+		case nil: return b == nil
+		case bool:
+			b, ok := b.(bool)
+			return ok && a == b
+		case string:
+			b, ok := b.(string)
+			return ok && a == b
+		case int64:
+			switch b := b.(type) {
+			case int64: return a == b
+			case float64: return float64(a) == b
+			default: return false
+			}
+		case float64:
+			switch b := b.(type) {
+				case float64: return a == b
+				case int64: return a == float64(b)
+				default: return false
+				}
+		default: return a == b // TODO
+		}
+	case api.LUA_OPLT:
+		switch a := a.(type) {
+		case string:
+			if b, ok := b.(string); ok {
+				return a < b
+			}
+		case int64:
+			switch b := b.(type) {
+			case int64: return a < b
+			case float64: return float64(a) < b
+			}
+		case float64:
+			switch b := b.(type) {
+			case float64: return a < b
+			case int64: return a < float64(b)
+			}
+		}
+	case api.LUA_OPLE:
+		switch a := a.(type) {
+		case string:
+			if b, ok := b.(string); ok {
+				return a <= b
+			}
+		case int64:
+			switch b := b.(type) {
+			case int64: return a <= b
+			case float64: return float64(a) <= b
+			}
+		case float64:
+			switch b := b.(type) {
+			case float64: return a <= b
+			case int64: return a <= float64(b)
+			}
+		}
+	default: panic("invalid compare op")
+	}
+	panic("comparison error")
+}
+
+func (state *luaState) Len(idx int) {
+	val := state.stack.get(idx)
+	if s, ok := val.(string); ok {
+		state.stack.push(int64(len(s)))
+	} else {
+		panic("length error") // TODO
+	}
+}
+
+func (state *luaState) Concat(n int) {
+	if n == 0 {
+		state.stack.push("")
+	} else if n >= 2 {
+		l := make([]string, n)
+		for n > 0 {
+			if state.IsString(-1) {
+				n--
+				l[n] = state.ToString(-1)
+				state.stack.pop()
+			}
+		}
+		if n > 0 {
+			panic("concatenation error")
+		}
+		state.stack.push(strings.Join(l, ""))
+	}
 }
