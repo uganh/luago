@@ -4,6 +4,8 @@ import (
 	"luago/api"
 )
 
+const LFIELDS_PER_FLUSH = 50
+
 type Instruction uint32
 
 func (inst Instruction) Opcode() int {
@@ -90,6 +92,30 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 			vm.Copy(-1, a+i)
 		}
 		vm.Pop(1)
+
+	case OP_GETTABLE: // R(A) := R(B)[RK(C)]
+		a, b, c := inst.ABC()
+		a += 1
+		b += 1
+
+		_getRK(vm, c)
+		vm.GetTable(b)
+		vm.Replace(a)
+
+	case OP_SETTABLE: // R(A)[RK(B)] := RK(C)
+		a, b, c := inst.ABC()
+		a += 1
+
+		_getRK(vm, b)
+		_getRK(vm, c)
+		vm.SetTable(a)
+
+	case OP_NEWTABLE: // R(A) := {} (size = B,C)
+		a, b, c := inst.ABC()
+		a++
+
+		vm.CreateTable(FPB2Int(b), FPB2Int(c))
+		vm.Replace(a)
 
 	case OP_ADD:
 		_binaryArith(inst, vm, api.LUA_OPADD)
@@ -200,6 +226,21 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		vm.Arith(api.LUA_OPSUB)
 		vm.Replace(a)
 		vm.AddPC(sbx)
+
+	case OP_SETLIST: // R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
+		a, b, c := inst.ABC()
+		a += 1
+
+		if c > 0 {
+			c = c - 1
+		} else {
+			c = Instruction(vm.Fetch()).Ax()
+		}
+		idx := c * LFIELDS_PER_FLUSH
+		for i := 1; i <= b; i++ {
+			vm.PushValue(a + i)
+			vm.SetI(a, int64(idx+i))
+		}
 
 	default:
 		panic(inst.Name())

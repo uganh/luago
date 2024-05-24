@@ -17,6 +17,8 @@ func typeOf(v luaValue) api.LuaType {
 		return api.LUA_TNUMBER
 	case string:
 		return api.LUA_TSTRING
+	case *luaTable:
+		return api.LUA_TTABLE
 	default:
 		panic(v)
 	}

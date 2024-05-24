@@ -384,10 +384,53 @@ func (state *luaState) Compare(idx1, idx2 int, op api.CompareOp) bool {
 	panic("comparison error")
 }
 
+func (state *luaState) NewTable() {
+	state.CreateTable(0, 0)
+}
+
+func (state *luaState) CreateTable(nArr, nRec int) {
+	state.stack.push(newLuaTable(nArr, nRec))
+}
+
+func (state *luaState) GetTable(idx int) api.LuaType {
+	t := state.stack.get(idx)
+	k := state.stack.pop()
+	return state.getTable(t, k)
+}
+
+func (state *luaState) GetField(idx int, k string) api.LuaType {
+	return state.getTable(state.stack.get(idx), k)
+}
+
+func (state *luaState) GetI(idx int, i int64) api.LuaType {
+	return state.getTable(state.stack.get(idx), i)
+}
+
+func (state *luaState) SetTable(idx int) {
+	t := state.stack.get(idx)
+	v := state.stack.pop()
+	k := state.stack.pop()
+	state.setTable(t, k, v)
+}
+
+func (state *luaState) SetField(idx int, k string) {
+	t := state.stack.get(idx)
+	v := state.stack.pop()
+	state.setTable(t, k, v)
+}
+
+func (state *luaState) SetI(idx int, i int64) {
+	t := state.stack.get(idx)
+	v := state.stack.pop()
+	state.setTable(t, i, v)
+}
+
 func (state *luaState) Len(idx int) {
 	val := state.stack.get(idx)
 	if s, ok := val.(string); ok {
 		state.stack.push(int64(len(s)))
+	} else if t, ok := val.(*luaTable); ok {
+		state.stack.push(int64(t.len()))
 	} else {
 		panic("length error") // TODO
 	}
@@ -428,4 +471,21 @@ func (state *luaState) Fetch() uint32 {
 
 func (state *luaState) GetConst(idx int) {
 	state.stack.push(state.proto.Constants[idx])
+}
+
+func (state *luaState) getTable(t, k luaValue) api.LuaType {
+	if t, ok := t.(*luaTable); ok {
+		v := t.get(k)
+		state.stack.push(v)
+		return typeOf(v)
+	}
+	panic("not a table") // TODO
+}
+
+func (state *luaState) setTable(t, k, v luaValue) {
+	if t, ok := t.(*luaTable); ok {
+		t.put(k, v)
+		return
+	}
+	panic("not a table") // TODO
 }
