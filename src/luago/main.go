@@ -3,32 +3,40 @@ package main
 import (
 	"fmt"
 	"luago/api"
+	"luago/binary"
 	"luago/state"
+	"luago/vm"
+	"os"
 )
 
 func main() {
-	ls := state.New()
+	if len(os.Args) > 1 {
+		data, err := os.ReadFile(os.Args[1])
+		if err != nil {
+			panic(err)
+		}
+		proto := binary.Parse(data)
+		luaMain(proto)
+	}
+}
 
-	ls.PushInteger(1)
-	ls.PushString("2.0")
-	ls.PushString("3.0")
-	ls.PushNumber(4.0)
-	printStack(ls) // [1]["2.0"]["3.0"][4]
+func luaMain(proto *binary.Prototype) {
+	const spaces = "        "
+	nRegs := int(proto.MaxStackSize)
+	ls := state.New(nRegs+8, proto)
+	ls.SetTop(nRegs)
+	for {
+		pc := ls.PC()
+		inst := vm.Instruction(ls.Fetch())
+		if inst.Opcode() == vm.OP_RETURN {
+			break
+		}
+		inst.Execute(ls)
 
-	ls.Arith(api.LUA_OPADD)
-	printStack(ls) // [1]["2.0"][7]
-
-	ls.Arith(api.LUA_OPBNOT)
-	printStack(ls) // [1]["2.0"][-8]
-
-	ls.Len(2)
-	printStack(ls) // [1]["2.0"][-8][3]
-
-	ls.Concat(3)
-	printStack(ls) // [1]["2.0-83"]
-
-	ls.PushBoolean(ls.Compare(1, 2, api.LUA_OPEQ))
-	printStack(ls) // [1]["2.0-83"][false]
+		name := inst.Name()
+		fmt.Printf("[%02d] %s%s ", pc+1, name, spaces[len(name):])
+		printStack(ls)
+	}
 }
 
 func printStack(ls api.LuaState) {

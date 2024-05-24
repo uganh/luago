@@ -79,20 +79,20 @@ func (self *reader) checkHeader() {
 }
 
 func (self *reader) readProto(parentSource string) *Prototype {
-	source := self.readString();
+	source := self.readString()
 	if source == "" {
 		source = parentSource
 	}
-	
+
 	proto := Prototype{
-		Source: source,
-		LineBegin: self.readUint32(),
-		LineEnd: self.readUint32(),
-		NumParams: self.readByte(),
-		IsVararg: self.readByte() != 0,
+		Source:       source,
+		LineBegin:    self.readUint32(),
+		LineEnd:      self.readUint32(),
+		NumParams:    self.readByte(),
+		IsVararg:     self.readByte() != 0,
 		MaxStackSize: self.readByte(),
 	}
-	
+
 	proto.Code = make([]uint32, self.readUint32())
 	for i := range proto.Code {
 		proto.Code[i] = self.readUint32()
@@ -118,7 +118,7 @@ func (self *reader) readProto(parentSource string) *Prototype {
 	for i := range proto.Upvalues {
 		proto.Upvalues[i] = Upvalue{
 			InStack: self.readByte(),
-			Index: self.readByte(),
+			Index:   self.readByte(),
 		}
 	}
 
@@ -137,7 +137,7 @@ func (self *reader) readProto(parentSource string) *Prototype {
 		proto.LocVars[i] = LocVar{
 			VarName: self.readString(),
 			StartPC: self.readUint32(),
-			EndPC: self.readUint32(),
+			EndPC:   self.readUint32(),
 		}
 	}
 
