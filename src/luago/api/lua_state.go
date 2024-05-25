@@ -29,6 +29,8 @@ type LuaState interface {
 	IsInteger(idx int) bool
 	IsNumber(idx int) bool
 	IsString(idx int) bool
+	IsFunction(idx int) bool
+	IsGoFunction(idx int) bool
 	ToBoolean(idx int) bool
 	ToInteger(idx int) int64
 	ToIntegerX(idx int) (int64, bool)
@@ -36,6 +38,7 @@ type LuaState interface {
 	ToNumberX(idx int) (float64, bool)
 	ToString(idx int) string
 	ToStringX(idx int) (string, bool)
+	ToGoFunction(idx int) GoFunction
 
 	/* push functions (Go -> stack) */
 	PushNil()
@@ -43,6 +46,8 @@ type LuaState interface {
 	PushInteger(n int64)
 	PushNumber(n float64)
 	PushString(s string)
+	PushGoFunction(f GoFunction)
+	PushGlobalTable()
 
 	/* comparison and arithmetic functions */
 	Arith(op ArithOp)
@@ -54,11 +59,14 @@ type LuaState interface {
 	GetTable(idx int) LuaType
 	GetField(idx int, k string) LuaType
 	GetI(idx int, i int64) LuaType
+	GetGlobal(name string) LuaType
 
 	/* set functions (stack -> Lua) */
 	SetTable(idx int)
 	SetField(idx int, k string)
 	SetI(idx int, i int64)
+	SetGlobal(name string)
+	Register(name string, f GoFunction)
 
 	/* `load` and `call` functions (load and run Lua code) */
 	Load(chunk []byte, chunkName, mode string) int
@@ -68,3 +76,5 @@ type LuaState interface {
 	Len(idx int)
 	Concat(n int)
 }
+
+type GoFunction func(LuaState) int

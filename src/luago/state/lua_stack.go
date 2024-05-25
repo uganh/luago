@@ -3,16 +3,18 @@ package state
 type luaStack struct {
 	slots   []luaValue
 	top     int
+	state   *luaState
 	prev    *luaStack
 	closure *luaClosure
 	varargs []luaValue
 	pc      int
 }
 
-func newLuaStack(size int) *luaStack {
+func newLuaStack(size int, state *luaState) *luaStack {
 	return &luaStack{
 		slots: make([]luaValue, size),
 		top:   0,
+		state: state,
 	}
 }
 
@@ -42,6 +44,9 @@ func (stack *luaStack) pop() luaValue {
 }
 
 func (stack *luaStack) absIndex(idx int) int {
+	if idx <= LUA_REGISTRYINDEX {
+		return idx
+	}
 	if idx >= 0 {
 		return idx
 	}
@@ -55,6 +60,9 @@ func (stack *luaStack) isValid(idx int) bool {
 
 func (stack *luaStack) get(idx int) luaValue {
 	absIdx := stack.absIndex(idx)
+	if idx == LUA_REGISTRYINDEX {
+		return stack.state.registry
+	}
 	if 0 < absIdx && absIdx <= stack.top {
 		return stack.slots[absIdx-1]
 	}
@@ -63,11 +71,13 @@ func (stack *luaStack) get(idx int) luaValue {
 
 func (stack *luaStack) set(idx int, val luaValue) {
 	absIdx := stack.absIndex(idx)
-	if 0 < absIdx && absIdx <= stack.top {
+	if idx == LUA_REGISTRYINDEX {
+		stack.state.registry = val.(*luaTable)
+	} else if 0 < absIdx && absIdx <= stack.top {
 		stack.slots[absIdx-1] = val
-		return
+	} else {
+		panic("set at invalid index")
 	}
-	panic("set at invalid index")
 }
 
 func (stack *luaStack) reverse(from, to int) {

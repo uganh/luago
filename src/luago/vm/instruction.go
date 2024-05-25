@@ -93,6 +93,16 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		}
 		vm.Pop(1)
 
+	case OP_GETTABUP:
+		// TODO
+		a, _, c := inst.ABC()
+		a += 1
+
+		vm.PushGlobalTable()
+		_getRK(vm, c)
+		vm.GetTable(-2)
+		vm.Replace(a)
+		vm.Pop(1)
 	case OP_GETTABLE: // R(A) := R(B)[RK(C)]
 		a, b, c := inst.ABC()
 		a += 1

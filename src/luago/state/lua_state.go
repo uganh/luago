@@ -10,14 +10,24 @@ import (
 	"strings"
 )
 
+const (
+	LUA_MINSTACK            = 20
+	LUAI_MAXSTACK           = 1000000
+	LUA_REGISTRYINDEX       = -LUAI_MAXSTACK - 1000
+	LUA_RIDX_GLOBALS  int64 = 2
+)
+
 type luaState struct {
-	stack *luaStack
+	registry *luaTable
+	stack    *luaStack
 }
 
 func New() *luaState {
-	return &luaState{
-		stack: newLuaStack(20),
-	}
+	registry := newLuaTable(0, 0)
+	registry.put(LUA_RIDX_GLOBALS, newLuaTable(0, 0)) // `_G`
+	state := &luaState{registry: registry}
+	state.stack = newLuaStack(LUA_MINSTACK, state)
+	return state
 }
 
 func (state *luaState) GetTop() int {
@@ -151,6 +161,18 @@ func (state *luaState) IsString(idx int) bool {
 	return t == api.LUA_TSTRING || t == api.LUA_TNUMBER
 }
 
+func (state *luaState) IsFunction(idx int) bool {
+	return state.Type(idx) == api.LUA_TFUNCTION
+}
+
+func (state *luaState) IsGoFunction(idx int) bool {
+	val := state.stack.get(idx)
+	if c, ok := val.(*luaClosure); ok {
+		return c.goFun != nil
+	}
+	return false
+}
+
 func (state *luaState) ToBoolean(idx int) bool {
 	val := state.stack.get(idx)
 	switch x := val.(type) {
@@ -200,6 +222,14 @@ func (state *luaState) ToStringX(idx int) (string, bool) {
 	}
 }
 
+func (state *luaState) ToGoFunction(idx int) api.GoFunction {
+	val := state.stack.get(idx)
+	if c, ok := val.(*luaClosure); ok {
+		return c.goFun
+	}
+	return nil
+}
+
 func (state *luaState) PushNil() {
 	state.stack.push(nil)
 }
@@ -218,6 +248,14 @@ func (state *luaState) PushNumber(n float64) {
 
 func (state *luaState) PushString(s string) {
 	state.stack.push(s)
+}
+
+func (state *luaState) PushGoFunction(f api.GoFunction) {
+	state.stack.push(newGoClosure(f))
+}
+
+func (state *luaState) PushGlobalTable() {
+	state.stack.push(state.registry.get(LUA_RIDX_GLOBALS))
 }
 
 func (state *luaState) Arith(op api.ArithOp) {
@@ -403,6 +441,10 @@ func (state *luaState) GetI(idx int, i int64) api.LuaType {
 	return state.getTable(state.stack.get(idx), i)
 }
 
+func (state *luaState) GetGlobal(name string) api.LuaType {
+	return state.getTable(state.registry.get(LUA_RIDX_GLOBALS), name)
+}
+
 func (state *luaState) SetTable(idx int) {
 	t := state.stack.get(idx)
 	v := state.stack.pop()
@@ -422,6 +464,17 @@ func (state *luaState) SetI(idx int, i int64) {
 	state.setTable(t, i, v)
 }
 
+func (state *luaState) SetGlobal(name string) {
+	t := state.registry.get(LUA_RIDX_GLOBALS)
+	v := state.stack.pop()
+	state.setTable(t, name, v)
+}
+
+func (state *luaState) Register(name string, f api.GoFunction) {
+	state.PushGoFunction(f)
+	state.SetGlobal(name)
+}
+
 func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
 	proto := binary.Parse(chunk)
 	state.stack.push(newLuaClosure(proto))
@@ -431,18 +484,11 @@ func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
 func (state *luaState) Call(nArgs, nResults int) {
 	val := state.stack.get(-(nArgs + 1))
 	if c, ok := val.(*luaClosure); ok {
-		// TODO
-		var spaces []byte
-		for s := state.stack; s.prev != nil; s = s.prev {
-			spaces = append(spaces, ' ')
+		if c.proto != nil {
+			state.callLuaClosure(nArgs, nResults, c)
+		} else {
+			state.callGoClosure(nArgs, nResults, c)
 		}
-		indent := string(spaces)
-		fmt.Printf("%sCall %s<%d,%d>, %d:%d\n", indent, c.proto.Source, c.proto.LineBegin, c.proto.LineEnd, nArgs, nResults)
-		fmt.Printf("%s> ", indent)
-		printStack(state)
-		state.callLuaClosure(nArgs, nResults, c)
-		fmt.Printf("%s< ", indent)
-		printStack(state)
 	} else {
 		panic("not a function")
 	}
@@ -546,7 +592,7 @@ func (state *luaState) callLuaClosure(nArgs, nResults int, closure *luaClosure) 
 	nParams := int(closure.proto.NumParams)
 	isVararg := closure.proto.IsVararg != 0
 
-	newStack := newLuaStack(nRegs + 20)
+	newStack := newLuaStack(nRegs+LUA_MINSTACK, state)
 	newStack.closure = closure
 
 	args := state.stack.popN(nArgs + 1)[1:]
@@ -570,6 +616,27 @@ func (state *luaState) callLuaClosure(nArgs, nResults int, closure *luaClosure) 
 	}
 }
 
+func (state *luaState) callGoClosure(nArgs, nResults int, closure *luaClosure) {
+	newStack := newLuaStack(nArgs+LUA_MINSTACK, state)
+	newStack.closure = closure
+
+	args := state.stack.popN(nArgs + 1)[1:]
+	newStack.pushN(args, nArgs)
+
+	state.pushLuaStack(newStack)
+	r := closure.goFun(state)
+	state.popLuaStack()
+
+	if nResults != 0 {
+		results := newStack.popN(r)
+		if nResults < 0 {
+			nResults = len(results)
+		}
+		state.stack.check(nResults)
+		state.stack.pushN(results, nResults)
+	}
+}
+
 func (state *luaState) runLuaClosure() {
 	for {
 		inst := vm.Instruction(state.Fetch())
@@ -578,33 +645,4 @@ func (state *luaState) runLuaClosure() {
 			break
 		}
 	}
-}
-
-func printStack(state *luaState) {
-	rsv := 0
-	if state.stack.closure != nil {
-		rsv = state.RegisterCount()
-	}
-	top := state.GetTop()
-	fmt.Print("\033[33m")
-	for idx := 1; idx <= top; idx++ {
-		if idx == rsv+1 {
-			fmt.Print("\033[0m")
-		}
-		t := state.Type(idx)
-		switch t {
-		case api.LUA_TBOOLEAN:
-			fmt.Printf("[%t]", state.ToBoolean(idx))
-		case api.LUA_TNUMBER:
-			fmt.Printf("[%g]", state.ToNumber(idx))
-		case api.LUA_TSTRING:
-			fmt.Printf("[%q]", state.ToString(idx))
-		default:
-			fmt.Printf("[%s]", state.TypeName(t))
-		}
-	}
-	if top == rsv {
-		fmt.Print("\033[0m")
-	}
-	fmt.Println()
 }
