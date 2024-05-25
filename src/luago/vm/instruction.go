@@ -92,17 +92,20 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 			vm.Copy(-1, a+i)
 		}
 		vm.Pop(1)
-
-	case OP_GETTABUP:
-		// TODO
-		a, _, c := inst.ABC()
+	case OP_GETUPVAL: // R(A) := UpValue[B]
+		a, b, _ := inst.ABC()
 		a += 1
+		b += 1
 
-		vm.PushGlobalTable()
+		vm.Copy(api.UpvalueIndex(b), a)
+	case OP_GETTABUP: // R(A) := UpValue[B][RK(C)]
+		a, b, c := inst.ABC()
+		a += 1
+		b += 1
+
 		_getRK(vm, c)
-		vm.GetTable(-2)
+		vm.GetTable(api.UpvalueIndex(b))
 		vm.Replace(a)
-		vm.Pop(1)
 	case OP_GETTABLE: // R(A) := R(B)[RK(C)]
 		a, b, c := inst.ABC()
 		a += 1
@@ -111,7 +114,19 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		_getRK(vm, c)
 		vm.GetTable(b)
 		vm.Replace(a)
+	case OP_SETTABUP: // UpValue[A][RK(B)] := RK(C)
+		a, b, c := inst.ABC()
+		a += 1
 
+		_getRK(vm, b)
+		_getRK(vm, c)
+		vm.SetTable(api.UpvalueIndex(a))
+	case OP_SETUPVAL: // UpValue[B] := R(A)
+		a, b, _ := inst.ABC()
+		a += 1
+		b += 1
+
+		vm.Copy(a, api.UpvalueIndex(b))
 	case OP_SETTABLE: // R(A)[RK(B)] := RK(C)
 		a, b, c := inst.ABC()
 		a += 1
@@ -119,7 +134,6 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		_getRK(vm, b)
 		_getRK(vm, c)
 		vm.SetTable(a)
-
 	case OP_NEWTABLE: // R(A) := {} (size = B,C)
 		a, b, c := inst.ABC()
 		a += 1
@@ -195,7 +209,7 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 
 		vm.AddPC(sbx)
 		if a != 0 {
-			panic(a) // TODO
+			vm.CloseUpvalues(a)
 		}
 	case OP_EQ:
 		_compare(inst, vm, api.LUA_OPEQ)

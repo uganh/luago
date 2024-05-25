@@ -1,9 +1,12 @@
 package state
 
+import "luago/api"
+
 type luaStack struct {
 	slots   []luaValue
 	top     int
 	state   *luaState
+	openuvs map[int]*upvalue
 	prev    *luaStack
 	closure *luaClosure
 	varargs []luaValue
@@ -44,7 +47,7 @@ func (stack *luaStack) pop() luaValue {
 }
 
 func (stack *luaStack) absIndex(idx int) int {
-	if idx <= LUA_REGISTRYINDEX {
+	if idx <= api.LUA_REGISTRYINDEX {
 		return idx
 	}
 	if idx >= 0 {
@@ -54,26 +57,58 @@ func (stack *luaStack) absIndex(idx int) int {
 }
 
 func (stack *luaStack) isValid(idx int) bool {
+	if idx == api.LUA_REGISTRYINDEX {
+		return true
+	}
+
+	if idx < api.LUA_REGISTRYINDEX { // upvalue
+		closure := stack.closure
+		return closure != nil && (api.LUA_REGISTRYINDEX-idx) <= len(closure.upvals)
+	}
+
 	absIdx := stack.absIndex(idx)
 	return 0 < absIdx && absIdx <= stack.top
 }
 
 func (stack *luaStack) get(idx int) luaValue {
-	absIdx := stack.absIndex(idx)
-	if idx == LUA_REGISTRYINDEX {
+	if idx == api.LUA_REGISTRYINDEX {
 		return stack.state.registry
 	}
+
+	if idx < api.LUA_REGISTRYINDEX { // upvalue
+		uvIdx := api.LUA_REGISTRYINDEX - idx - 1
+		closure := stack.closure
+		if closure == nil || uvIdx >= len(closure.upvals) {
+			return nil
+		}
+		return *(closure.upvals[uvIdx].val)
+	}
+
+	absIdx := stack.absIndex(idx)
 	if 0 < absIdx && absIdx <= stack.top {
 		return stack.slots[absIdx-1]
 	}
+
 	return nil
 }
 
 func (stack *luaStack) set(idx int, val luaValue) {
-	absIdx := stack.absIndex(idx)
-	if idx == LUA_REGISTRYINDEX {
+	if idx == api.LUA_REGISTRYINDEX {
 		stack.state.registry = val.(*luaTable)
-	} else if 0 < absIdx && absIdx <= stack.top {
+		return
+	}
+
+	if idx < api.LUA_REGISTRYINDEX { // upvalue
+		uvIdx := api.LUA_REGISTRYINDEX - idx - 1
+		closure := stack.closure
+		if closure != nil && uvIdx < len(closure.upvals) {
+			*(closure.upvals[uvIdx].val) = val
+		}
+		return
+	}
+
+	absIdx := stack.absIndex(idx)
+	if 0 < absIdx && absIdx <= stack.top {
 		stack.slots[absIdx-1] = val
 	} else {
 		panic("set at invalid index")

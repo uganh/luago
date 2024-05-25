@@ -10,13 +10,6 @@ import (
 	"strings"
 )
 
-const (
-	LUA_MINSTACK            = 20
-	LUAI_MAXSTACK           = 1000000
-	LUA_REGISTRYINDEX       = -LUAI_MAXSTACK - 1000
-	LUA_RIDX_GLOBALS  int64 = 2
-)
-
 type luaState struct {
 	registry *luaTable
 	stack    *luaStack
@@ -24,9 +17,9 @@ type luaState struct {
 
 func New() *luaState {
 	registry := newLuaTable(0, 0)
-	registry.put(LUA_RIDX_GLOBALS, newLuaTable(0, 0)) // `_G`
+	registry.put(api.LUA_RIDX_GLOBALS, newLuaTable(0, 0)) // `_G`
 	state := &luaState{registry: registry}
-	state.stack = newLuaStack(LUA_MINSTACK, state)
+	state.stack = newLuaStack(api.LUA_MINSTACK, state)
 	return state
 }
 
@@ -251,11 +244,20 @@ func (state *luaState) PushString(s string) {
 }
 
 func (state *luaState) PushGoFunction(f api.GoFunction) {
-	state.stack.push(newGoClosure(f))
+	state.PushGoClosure(f, 0)
+}
+
+func (state *luaState) PushGoClosure(f api.GoFunction, n int) {
+	c := newGoClosure(f, n)
+	for i := n - 1; i >= 0; i-- {
+		val := state.stack.pop()
+		c.upvals[i] = &upvalue{&val}
+	}
+	state.stack.push(c)
 }
 
 func (state *luaState) PushGlobalTable() {
-	state.stack.push(state.registry.get(LUA_RIDX_GLOBALS))
+	state.stack.push(state.registry.get(api.LUA_RIDX_GLOBALS))
 }
 
 func (state *luaState) Arith(op api.ArithOp) {
@@ -442,7 +444,7 @@ func (state *luaState) GetI(idx int, i int64) api.LuaType {
 }
 
 func (state *luaState) GetGlobal(name string) api.LuaType {
-	return state.getTable(state.registry.get(LUA_RIDX_GLOBALS), name)
+	return state.getTable(state.registry.get(api.LUA_RIDX_GLOBALS), name)
 }
 
 func (state *luaState) SetTable(idx int) {
@@ -465,7 +467,7 @@ func (state *luaState) SetI(idx int, i int64) {
 }
 
 func (state *luaState) SetGlobal(name string) {
-	t := state.registry.get(LUA_RIDX_GLOBALS)
+	t := state.registry.get(api.LUA_RIDX_GLOBALS)
 	v := state.stack.pop()
 	state.setTable(t, name, v)
 }
@@ -477,7 +479,12 @@ func (state *luaState) Register(name string, f api.GoFunction) {
 
 func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
 	proto := binary.Parse(chunk)
-	state.stack.push(newLuaClosure(proto))
+	c := newLuaClosure(proto)
+	if len(proto.Upvalues) > 0 {
+		val := state.registry.get(api.LUA_RIDX_GLOBALS) // `_ENV`
+		c.upvals[0] = &upvalue{&val}
+	}
+	state.stack.push(c)
 	return 0
 }
 
@@ -555,8 +562,36 @@ func (state *luaState) LoadVararg(n int) {
 }
 
 func (state *luaState) LoadProto(idx int) {
-	proto := state.stack.closure.proto.Protos[idx]
-	state.stack.push(newLuaClosure(proto))
+	stack := state.stack
+	proto := stack.closure.proto.Protos[idx]
+	c := newLuaClosure(proto)
+	for i, info := range proto.Upvalues {
+		uvIdx := int(info.Index)
+		if info.InStack == 1 {
+			if stack.openuvs == nil {
+				stack.openuvs = map[int]*upvalue{}
+			}
+			if upval, found := stack.openuvs[uvIdx]; found {
+				c.upvals[i] = upval
+			} else {
+				c.upvals[i] = &upvalue{&stack.slots[uvIdx]}
+				stack.openuvs[uvIdx] = c.upvals[i]
+			}
+		} else {
+			c.upvals[i] = stack.closure.upvals[uvIdx]
+		}
+	}
+	stack.push(c)
+}
+
+func (state *luaState) CloseUpvalues(a int) {
+	for uvIdx, upval := range state.stack.openuvs {
+		if uvIdx+1 >= a {
+			val := *upval.val
+			upval.val = &val
+			delete(state.stack.openuvs, uvIdx)
+		}
+	}
 }
 
 func (state *luaState) getTable(t, k luaValue) api.LuaType {
@@ -592,7 +627,7 @@ func (state *luaState) callLuaClosure(nArgs, nResults int, closure *luaClosure) 
 	nParams := int(closure.proto.NumParams)
 	isVararg := closure.proto.IsVararg != 0
 
-	newStack := newLuaStack(nRegs+LUA_MINSTACK, state)
+	newStack := newLuaStack(nRegs+api.LUA_MINSTACK, state)
 	newStack.closure = closure
 
 	args := state.stack.popN(nArgs + 1)[1:]
@@ -617,7 +652,7 @@ func (state *luaState) callLuaClosure(nArgs, nResults int, closure *luaClosure) 
 }
 
 func (state *luaState) callGoClosure(nArgs, nResults int, closure *luaClosure) {
-	newStack := newLuaStack(nArgs+LUA_MINSTACK, state)
+	newStack := newLuaStack(nArgs+api.LUA_MINSTACK, state)
 	newStack.closure = closure
 
 	args := state.stack.popN(nArgs + 1)[1:]

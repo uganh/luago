@@ -5,19 +5,28 @@ import (
 	"luago/binary"
 )
 
+type upvalue struct {
+	val *luaValue
+}
+
 type luaClosure struct {
-	proto *binary.Prototype
-	goFun api.GoFunction
+	proto  *binary.Prototype
+	goFun  api.GoFunction
+	upvals []*upvalue
 }
 
 func newLuaClosure(proto *binary.Prototype) *luaClosure {
-	return &luaClosure{
-		proto: proto,
+	closure := &luaClosure{proto: proto}
+	if nUpvals := len(proto.Upvalues); nUpvals > 0 {
+		closure.upvals = make([]*upvalue, nUpvals)
 	}
+	return closure
 }
 
-func newGoClosure(goFun api.GoFunction) *luaClosure {
-	return &luaClosure{
-		goFun: goFun,
+func newGoClosure(goFun api.GoFunction, nUpvals int) *luaClosure {
+	closure := &luaClosure{goFun: goFun}
+	if nUpvals > 0 {
+		closure.upvals = make([]*upvalue, nUpvals)
 	}
+	return closure
 }

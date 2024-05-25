@@ -1,5 +1,12 @@
 package api
 
+const (
+	LUA_MINSTACK            = 20
+	LUAI_MAXSTACK           = 1000000
+	LUA_REGISTRYINDEX       = -LUAI_MAXSTACK - 1000
+	LUA_RIDX_GLOBALS  int64 = 2
+)
+
 type LuaType = int
 
 type ArithOp = int
@@ -47,6 +54,7 @@ type LuaState interface {
 	PushNumber(n float64)
 	PushString(s string)
 	PushGoFunction(f GoFunction)
+	PushGoClosure(f GoFunction, n int)
 	PushGlobalTable()
 
 	/* comparison and arithmetic functions */
@@ -78,3 +86,7 @@ type LuaState interface {
 }
 
 type GoFunction func(LuaState) int
+
+func UpvalueIndex(idx int) int {
+	return LUA_REGISTRYINDEX - idx
+}
