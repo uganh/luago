@@ -285,7 +285,21 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		vm.Arith(api.LUA_OPSUB)
 		vm.Replace(a)
 		vm.AddPC(sbx)
+	case OP_TFORCALL: // R(A+3), ..., R(A+2+C) := R(A)(R(A+1), R(A+2))
+		a, _, c := inst.ABC()
+		a += 1
 
+		_preCall(a, 3, vm)
+		vm.Call(2, c)
+		_postCall(a+3, c+1, vm)
+	case OP_TFORLOOP: // if R(A+1) ~= nil then { R(A) := R(A+1); pc += sBx }
+		a, sbx := inst.AsBx()
+		a += 1
+
+		if !vm.IsNil(a + 1) {
+			vm.Copy(a+1, a)
+			vm.AddPC(sbx)
+		}
 	case OP_SETLIST: // R(A)[(C-1)*FPF+i] := R(A+i), 1 <= i <= B
 		a, b, c := inst.ABC()
 		a += 1

@@ -7,6 +7,9 @@ import (
 
 type luaTable struct {
 	metatable *luaTable
+	keys      map[luaValue]luaValue
+	lastKey   luaValue
+	changed   bool
 	a         []luaValue
 	m         map[luaValue]luaValue
 }
@@ -45,6 +48,8 @@ func (table *luaTable) put(key, val luaValue) {
 		panic("table index is NaN")
 	}
 
+	table.changed = true
+
 	key = _normalizeKey(key)
 	if idx, ok := key.(int64); ok && idx >= 1 {
 		nArr := int64(len(table.a))
@@ -77,6 +82,37 @@ func (table *luaTable) put(key, val luaValue) {
 
 func (table *luaTable) hasMetafield(name string) bool {
 	return table.metatable != nil && table.metatable.get(name) != nil
+}
+
+func (table *luaTable) nextKey(key luaValue) luaValue {
+	if table.keys == nil || (key == nil && table.changed) {
+		table.keys = make(map[luaValue]luaValue)
+		var lastKey luaValue
+
+		for i, v := range table.a {
+			if v != nil {
+				table.keys[lastKey] = int64(i + 1)
+				lastKey = int64(i + 1)
+			}
+		}
+
+		for k, v := range table.m {
+			if v != nil {
+				table.keys[lastKey] = k
+				lastKey = k
+			}
+		}
+
+		table.lastKey = lastKey
+		table.changed = false
+	}
+
+	nextKey := table.keys[key]
+	if nextKey == nil && key != nil && key != table.lastKey {
+		panic("invalid key to `next`")
+	}
+
+	return nextKey
 }
 
 func _normalizeKey(key luaValue) luaValue {

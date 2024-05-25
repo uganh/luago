@@ -91,6 +91,7 @@ type LuaState interface {
 	/* miscellaneous functions */
 	Len(idx int)
 	Concat(n int)
+	Next(idx int) bool
 }
 
 type GoFunction func(LuaState) int

@@ -611,6 +611,20 @@ func (state *luaState) Concat(n int) {
 	}
 }
 
+func (state *luaState) Next(idx int) bool {
+	val := state.stack.get(idx)
+	if t, ok := val.(*luaTable); ok {
+		key := state.stack.pop()
+		if nextKey := t.nextKey(key); nextKey != nil {
+			state.stack.push(nextKey)
+			state.stack.push(t.get(nextKey))
+			return true
+		}
+		return false
+	}
+	panic("table expected")
+}
+
 func (state *luaState) PC() int {
 	return state.stack.pc
 }
