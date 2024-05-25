@@ -7,7 +7,6 @@ import (
 	"luago/number"
 	"luago/vm"
 	"math"
-	"strings"
 )
 
 type luaState struct {
@@ -167,15 +166,7 @@ func (state *luaState) IsGoFunction(idx int) bool {
 }
 
 func (state *luaState) ToBoolean(idx int) bool {
-	val := state.stack.get(idx)
-	switch x := val.(type) {
-	case nil:
-		return false
-	case bool:
-		return x
-	default:
-		return true
-	}
+	return convertToBoolean(state.stack.get(idx))
 }
 
 func (state *luaState) ToInteger(idx int) int64 {
@@ -221,6 +212,17 @@ func (state *luaState) ToGoFunction(idx int) api.GoFunction {
 		return c.goFun
 	}
 	return nil
+}
+
+func (state *luaState) RawLen(idx int) uint {
+	val := state.stack.get(idx)
+	if s, ok := val.(string); ok {
+		return uint(len(s))
+	} else if t, ok := val.(*luaTable); ok {
+		return uint(t.len())
+	} else {
+		return 0
+	}
 }
 
 func (state *luaState) PushNil() {
@@ -269,42 +271,59 @@ func (state *luaState) Arith(op api.ArithOp) {
 		a = b
 	}
 
+	var mName string
 	var iFunc func(int64, int64) int64
 	var fFunc func(float64, float64) float64
 
 	switch op {
 	case api.LUA_OPADD:
+		mName = "__add"
 		iFunc = func(a, b int64) int64 { return a + b }
 		fFunc = func(a, b float64) float64 { return a + b }
 	case api.LUA_OPSUB:
+		mName = "__sub"
 		iFunc = func(a, b int64) int64 { return a - b }
 		fFunc = func(a, b float64) float64 { return a - b }
 	case api.LUA_OPMUL:
+		mName = "__mul"
 		iFunc = func(a, b int64) int64 { return a * b }
 		fFunc = func(a, b float64) float64 { return a * b }
 	case api.LUA_OPMOD:
+		mName = "__mod"
 		iFunc, fFunc = number.IMod, number.FMod
 	case api.LUA_OPPOW:
+		mName = "__pow"
 		fFunc = math.Pow
 	case api.LUA_OPDIV:
+		mName = "__div"
 		fFunc = func(a, b float64) float64 { return a / b }
 	case api.LUA_OPIDIV:
+		mName = "__idiv"
 		iFunc, fFunc = number.IFloorDiv, number.FFloorDiv
 	case api.LUA_OPBAND:
+		mName = "__band"
 		iFunc = func(a, b int64) int64 { return a & b }
 	case api.LUA_OPBOR:
+		mName = "__bor"
 		iFunc = func(a, b int64) int64 { return a | b }
 	case api.LUA_OPBXOR:
+		mName = "__bxor"
 		iFunc = func(a, b int64) int64 { return a ^ b }
 	case api.LUA_OPSHL:
+		mName = "__shl"
 		iFunc = number.ShiftLeft
 	case api.LUA_OPSHR:
+		mName = "__shr"
 		iFunc = number.ShiftRight
 	case api.LUA_OPUNM:
+		mName = "__unm"
 		iFunc = func(a, _ int64) int64 { return -a }
 		fFunc = func(a, _ float64) float64 { return -a }
 	case api.LUA_OPBNOT:
+		mName = "__bnot"
 		iFunc = func(a, _ int64) int64 { return ^a }
+	default:
+		panic("invalid arith op")
 	}
 
 	if fFunc == nil { // bitwise operation
@@ -318,20 +337,22 @@ func (state *luaState) Arith(op api.ArithOp) {
 			if a, ok := a.(int64); ok {
 				if b, ok := b.(int64); ok {
 					r = iFunc(a, b)
-					goto end
 				}
 			}
 		}
 
-		if a, ok := convertToFloat(a); ok {
-			if b, ok := convertToFloat(b); ok {
-				r = fFunc(a, b)
+		if r == nil {
+			if a, ok := convertToFloat(a); ok {
+				if b, ok := convertToFloat(b); ok {
+					r = fFunc(a, b)
+				}
 			}
 		}
 	}
 
-end:
 	if r != nil {
+		state.stack.push(r)
+	} else if r, ok := callMetamethod(a, b, mName, state); ok {
 		state.stack.push(r)
 	} else {
 		panic("arithmetic error")
@@ -339,40 +360,16 @@ end:
 }
 
 func (state *luaState) Compare(idx1, idx2 int, op api.CompareOp) bool {
+	if !state.stack.isValid(idx1) || !state.stack.isValid(idx2) {
+		return false
+	}
+
 	a := state.stack.get(idx1)
 	b := state.stack.get(idx2)
+
 	switch op {
 	case api.LUA_OPEQ:
-		switch a := a.(type) {
-		case nil:
-			return b == nil
-		case bool:
-			b, ok := b.(bool)
-			return ok && a == b
-		case string:
-			b, ok := b.(string)
-			return ok && a == b
-		case int64:
-			switch b := b.(type) {
-			case int64:
-				return a == b
-			case float64:
-				return float64(a) == b
-			default:
-				return false
-			}
-		case float64:
-			switch b := b.(type) {
-			case float64:
-				return a == b
-			case int64:
-				return a == float64(b)
-			default:
-				return false
-			}
-		default:
-			return a == b // TODO
-		}
+		return equal(a, b, state)
 	case api.LUA_OPLT:
 		switch a := a.(type) {
 		case string:
@@ -393,6 +390,9 @@ func (state *luaState) Compare(idx1, idx2 int, op api.CompareOp) bool {
 			case int64:
 				return a < float64(b)
 			}
+		}
+		if r, ok := callMetamethod(a, b, "__lt", state); ok {
+			return convertToBoolean(r)
 		}
 	case api.LUA_OPLE:
 		switch a := a.(type) {
@@ -415,10 +415,26 @@ func (state *luaState) Compare(idx1, idx2 int, op api.CompareOp) bool {
 				return a <= float64(b)
 			}
 		}
+		if r, ok := callMetamethod(a, b, "__le", state); ok {
+			return convertToBoolean(r)
+		} else if r, ok := callMetamethod(b, a, "__lt", state); ok {
+			return !convertToBoolean(r)
+		}
 	default:
 		panic("invalid compare op")
 	}
 	panic("comparison error")
+}
+
+func (state *luaState) RawEqual(idx1, idx2 int) bool {
+	if !state.stack.isValid(idx1) || !state.stack.isValid(idx2) {
+		return false
+	}
+
+	a := state.stack.get(idx1)
+	b := state.stack.get(idx2)
+
+	return equal(a, b, nil)
 }
 
 func (state *luaState) NewTable() {
@@ -432,44 +448,87 @@ func (state *luaState) CreateTable(nArr, nRec int) {
 func (state *luaState) GetTable(idx int) api.LuaType {
 	t := state.stack.get(idx)
 	k := state.stack.pop()
-	return state.getTable(t, k)
+	return state.getTable(t, k, false)
 }
 
 func (state *luaState) GetField(idx int, k string) api.LuaType {
-	return state.getTable(state.stack.get(idx), k)
+	return state.getTable(state.stack.get(idx), k, false)
 }
 
 func (state *luaState) GetI(idx int, i int64) api.LuaType {
-	return state.getTable(state.stack.get(idx), i)
+	return state.getTable(state.stack.get(idx), i, false)
+}
+
+func (state *luaState) RawGet(idx int) api.LuaType {
+	t := state.stack.get(idx)
+	k := state.stack.pop()
+	return state.getTable(t, k, true)
+}
+
+func (state *luaState) RawGetI(idx int, i int64) api.LuaType {
+	return state.getTable(state.stack.get(idx), i, true)
+}
+
+func (state *luaState) GetMetatable(idx int) bool {
+	if mt := getMetatable(state.stack.get(idx), state); mt != nil {
+		state.stack.push(mt)
+		return true
+	}
+	return false
 }
 
 func (state *luaState) GetGlobal(name string) api.LuaType {
-	return state.getTable(state.registry.get(api.LUA_RIDX_GLOBALS), name)
+	return state.getTable(state.registry.get(api.LUA_RIDX_GLOBALS), name, true)
 }
 
 func (state *luaState) SetTable(idx int) {
 	t := state.stack.get(idx)
 	v := state.stack.pop()
 	k := state.stack.pop()
-	state.setTable(t, k, v)
+	state.setTable(t, k, v, false)
 }
 
 func (state *luaState) SetField(idx int, k string) {
 	t := state.stack.get(idx)
 	v := state.stack.pop()
-	state.setTable(t, k, v)
+	state.setTable(t, k, v, false)
 }
 
 func (state *luaState) SetI(idx int, i int64) {
 	t := state.stack.get(idx)
 	v := state.stack.pop()
-	state.setTable(t, i, v)
+	state.setTable(t, i, v, false)
+}
+
+func (state *luaState) RawSet(idx int) {
+	t := state.stack.get(idx)
+	v := state.stack.pop()
+	k := state.stack.pop()
+	state.setTable(t, k, v, true)
+}
+
+func (state *luaState) RawSetI(idx int, i int64) {
+	t := state.stack.get(idx)
+	v := state.stack.pop()
+	state.setTable(t, i, v, true)
+}
+
+func (state *luaState) SetMetatable(idx int) {
+	val := state.stack.get(idx)
+	mtVal := state.stack.pop()
+	if mtVal == nil {
+		setMetatable(val, nil, state)
+	} else if mt, ok := mtVal.(*luaTable); ok {
+		setMetatable(val, mt, state)
+	} else {
+		panic("table expected") // TODO
+	}
 }
 
 func (state *luaState) SetGlobal(name string) {
 	t := state.registry.get(api.LUA_RIDX_GLOBALS)
 	v := state.stack.pop()
-	state.setTable(t, name, v)
+	state.setTable(t, name, v, true)
 }
 
 func (state *luaState) Register(name string, f api.GoFunction) {
@@ -490,7 +549,20 @@ func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
 
 func (state *luaState) Call(nArgs, nResults int) {
 	val := state.stack.get(-(nArgs + 1))
-	if c, ok := val.(*luaClosure); ok {
+
+	c, ok := val.(*luaClosure)
+	if !ok {
+		if mf := getMetafield(val, "__call", state); mf != nil {
+			if c, ok = mf.(*luaClosure); ok {
+				state.stack.check(1)
+				state.stack.push(val)
+				state.Insert(-(nArgs + 2))
+				nArgs += 1
+			}
+		}
+	}
+
+	if ok {
 		if c.proto != nil {
 			state.callLuaClosure(nArgs, nResults, c)
 		} else {
@@ -505,10 +577,12 @@ func (state *luaState) Len(idx int) {
 	val := state.stack.get(idx)
 	if s, ok := val.(string); ok {
 		state.stack.push(int64(len(s)))
+	} else if r, ok := callMetamethod(val, val, "__len", state); ok {
+		state.stack.push(r)
 	} else if t, ok := val.(*luaTable); ok {
 		state.stack.push(int64(t.len()))
 	} else {
-		panic("length error") // TODO
+		panic("length error")
 	}
 }
 
@@ -516,18 +590,24 @@ func (state *luaState) Concat(n int) {
 	if n == 0 {
 		state.stack.push("")
 	} else if n >= 2 {
-		l := make([]string, n)
-		for n > 0 {
-			if state.IsString(-1) {
-				n--
-				l[n] = state.ToString(-1)
+		for i := 1; i < n; i++ {
+			if state.IsString(-1) && state.IsString(-2) {
+				s2 := state.ToString(-1)
+				s1 := state.ToString(-2)
 				state.stack.pop()
+				state.stack.pop()
+				state.stack.push(s1 + s2)
+				continue
+			}
+
+			b := state.stack.pop()
+			a := state.stack.pop()
+			if r, ok := callMetamethod(a, b, "__concat", state); ok {
+				state.stack.push(r)
+			} else {
+				panic("concatenation error")
 			}
 		}
-		if n > 0 {
-			panic("concatenation error")
-		}
-		state.stack.push(strings.Join(l, ""))
 	}
 }
 
@@ -594,21 +674,61 @@ func (state *luaState) CloseUpvalues(a int) {
 	}
 }
 
-func (state *luaState) getTable(t, k luaValue) api.LuaType {
+func (state *luaState) getTable(t, k luaValue, raw bool) api.LuaType {
 	if t, ok := t.(*luaTable); ok {
 		v := t.get(k)
-		state.stack.push(v)
-		return typeOf(v)
+		if v != nil || raw || !t.hasMetafield("__index") {
+			state.stack.push(v)
+			return typeOf(v)
+		}
 	}
-	panic("not a table") // TODO
+
+	if !raw {
+		if mf := getMetafield(t, "__index", state); mf != nil {
+			switch x := mf.(type) {
+			case *luaTable:
+				return state.getTable(x, k, false)
+			case *luaClosure:
+				state.stack.check(3)
+				state.stack.push(x)
+				state.stack.push(t)
+				state.stack.push(k)
+				state.Call(2, 1)
+				return typeOf(state.stack.get(-1))
+			}
+		}
+	}
+
+	panic("index error")
 }
 
-func (state *luaState) setTable(t, k, v luaValue) {
+func (state *luaState) setTable(t, k, v luaValue, raw bool) {
 	if t, ok := t.(*luaTable); ok {
-		t.put(k, v)
-		return
+		if raw || t.get(k) != nil || !t.hasMetafield("__newindex") {
+			t.put(k, v)
+			return
+		}
 	}
-	panic("not a table") // TODO
+
+	if !raw {
+		if mf := getMetafield(t, "__newindex", state); mf != nil {
+			switch x := mf.(type) {
+			case *luaTable:
+				state.setTable(x, k, v, false)
+				return
+			case *luaClosure:
+				state.stack.check(4)
+				state.stack.push(x)
+				state.stack.push(t)
+				state.stack.push(k)
+				state.stack.push(v)
+				state.Call(3, 0)
+				return
+			}
+		}
+	}
+
+	panic("index error")
 }
 
 func (state *luaState) pushLuaStack(stack *luaStack) {

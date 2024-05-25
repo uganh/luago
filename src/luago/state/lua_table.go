@@ -6,8 +6,9 @@ import (
 )
 
 type luaTable struct {
-	a []luaValue
-	m map[luaValue]luaValue
+	metatable *luaTable
+	a         []luaValue
+	m         map[luaValue]luaValue
 }
 
 func newLuaTable(nArr, nRec int) *luaTable {
@@ -72,6 +73,10 @@ func (table *luaTable) put(key, val luaValue) {
 	} else {
 		delete(table.m, key)
 	}
+}
+
+func (table *luaTable) hasMetafield(name string) bool {
+	return table.metatable != nil && table.metatable.get(name) != nil
 }
 
 func _normalizeKey(key luaValue) luaValue {
