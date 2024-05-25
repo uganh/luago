@@ -5,4 +5,7 @@ type LuaVM interface {
 	AddPC(n int)
 	Fetch() uint32
 	GetConst(idx int)
+	RegisterCount() int
+	LoadVararg(n int)
+	LoadProto(idx int)
 }

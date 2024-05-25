@@ -5,21 +5,18 @@ import (
 	"luago/api"
 	"luago/binary"
 	"luago/number"
+	"luago/vm"
 	"math"
 	"strings"
 )
 
 type luaState struct {
 	stack *luaStack
-	proto *binary.Prototype
-	pc    int
 }
 
-func New(stackSize int, proto *binary.Prototype) *luaState {
+func New() *luaState {
 	return &luaState{
-		stack: newLuaStack(stackSize),
-		proto: proto,
-		pc:    0,
+		stack: newLuaStack(20),
 	}
 }
 
@@ -425,6 +422,32 @@ func (state *luaState) SetI(idx int, i int64) {
 	state.setTable(t, i, v)
 }
 
+func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
+	proto := binary.Parse(chunk)
+	state.stack.push(newLuaClosure(proto))
+	return 0
+}
+
+func (state *luaState) Call(nArgs, nResults int) {
+	val := state.stack.get(-(nArgs + 1))
+	if c, ok := val.(*luaClosure); ok {
+		// TODO
+		var spaces []byte
+		for s := state.stack; s.prev != nil; s = s.prev {
+			spaces = append(spaces, ' ')
+		}
+		indent := string(spaces)
+		fmt.Printf("%sCall %s<%d,%d>, %d:%d\n", indent, c.proto.Source, c.proto.LineBegin, c.proto.LineEnd, nArgs, nResults)
+		fmt.Printf("%s> ", indent)
+		printStack(state)
+		state.callLuaClosure(nArgs, nResults, c)
+		fmt.Printf("%s< ", indent)
+		printStack(state)
+	} else {
+		panic("not a function")
+	}
+}
+
 func (state *luaState) Len(idx int) {
 	val := state.stack.get(idx)
 	if s, ok := val.(string); ok {
@@ -456,21 +479,38 @@ func (state *luaState) Concat(n int) {
 }
 
 func (state *luaState) PC() int {
-	return state.pc
+	return state.stack.pc
 }
 
 func (state *luaState) AddPC(n int) {
-	state.pc += n
+	state.stack.pc += n
 }
 
 func (state *luaState) Fetch() uint32 {
-	c := state.proto.Code[state.pc]
-	state.pc++
+	c := state.stack.closure.proto.Code[state.stack.pc]
+	state.stack.pc++
 	return c
 }
 
 func (state *luaState) GetConst(idx int) {
-	state.stack.push(state.proto.Constants[idx])
+	state.stack.push(state.stack.closure.proto.Constants[idx])
+}
+
+func (state *luaState) RegisterCount() int {
+	return int(state.stack.closure.proto.MaxStackSize)
+}
+
+func (state *luaState) LoadVararg(n int) {
+	if n < 0 {
+		n = len(state.stack.varargs)
+	}
+	state.stack.check(n)
+	state.stack.pushN(state.stack.varargs, n)
+}
+
+func (state *luaState) LoadProto(idx int) {
+	proto := state.stack.closure.proto.Protos[idx]
+	state.stack.push(newLuaClosure(proto))
 }
 
 func (state *luaState) getTable(t, k luaValue) api.LuaType {
@@ -488,4 +528,83 @@ func (state *luaState) setTable(t, k, v luaValue) {
 		return
 	}
 	panic("not a table") // TODO
+}
+
+func (state *luaState) pushLuaStack(stack *luaStack) {
+	stack.prev = state.stack
+	state.stack = stack
+}
+
+func (state *luaState) popLuaStack() {
+	stack := state.stack
+	state.stack = stack.prev
+	stack.prev = nil
+}
+
+func (state *luaState) callLuaClosure(nArgs, nResults int, closure *luaClosure) {
+	nRegs := int(closure.proto.MaxStackSize)
+	nParams := int(closure.proto.NumParams)
+	isVararg := closure.proto.IsVararg != 0
+
+	newStack := newLuaStack(nRegs + 20)
+	newStack.closure = closure
+
+	args := state.stack.popN(nArgs + 1)[1:]
+	newStack.pushN(args, nParams)
+	newStack.top = nRegs
+	if nArgs > nParams && isVararg {
+		newStack.varargs = args[nParams:]
+	}
+
+	state.pushLuaStack(newStack)
+	state.runLuaClosure()
+	state.popLuaStack()
+
+	if nResults != 0 {
+		results := newStack.popN(newStack.top - nRegs)
+		if nResults < 0 {
+			nResults = len(results)
+		}
+		state.stack.check(nResults)
+		state.stack.pushN(results, nResults)
+	}
+}
+
+func (state *luaState) runLuaClosure() {
+	for {
+		inst := vm.Instruction(state.Fetch())
+		inst.Execute(state)
+		if inst.Opcode() == vm.OP_RETURN {
+			break
+		}
+	}
+}
+
+func printStack(state *luaState) {
+	rsv := 0
+	if state.stack.closure != nil {
+		rsv = state.RegisterCount()
+	}
+	top := state.GetTop()
+	fmt.Print("\033[33m")
+	for idx := 1; idx <= top; idx++ {
+		if idx == rsv+1 {
+			fmt.Print("\033[0m")
+		}
+		t := state.Type(idx)
+		switch t {
+		case api.LUA_TBOOLEAN:
+			fmt.Printf("[%t]", state.ToBoolean(idx))
+		case api.LUA_TNUMBER:
+			fmt.Printf("[%g]", state.ToNumber(idx))
+		case api.LUA_TSTRING:
+			fmt.Printf("[%q]", state.ToString(idx))
+		default:
+			fmt.Printf("[%s]", state.TypeName(t))
+		}
+	}
+	if top == rsv {
+		fmt.Print("\033[0m")
+	}
+	fmt.Println()
 }

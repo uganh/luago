@@ -112,11 +112,19 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 
 	case OP_NEWTABLE: // R(A) := {} (size = B,C)
 		a, b, c := inst.ABC()
-		a++
+		a += 1
 
 		vm.CreateTable(FPB2Int(b), FPB2Int(c))
 		vm.Replace(a)
+	case OP_SELF: // R(A+1) := R(B); R(A) := R(B)[RK(C)]
+		a, b, c := inst.ABC()
+		a += 1
+		b += 1
 
+		vm.Copy(b, a+1)
+		_getRK(vm, c)
+		vm.GetTable(b)
+		vm.Replace(a)
 	case OP_ADD:
 		_binaryArith(inst, vm, api.LUA_OPADD)
 	case OP_SUB:
@@ -202,7 +210,34 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		} else {
 			vm.AddPC(1)
 		}
+	case OP_CALL: // R(A), ..., R(A+C-2) := R(A)(R(A+1), ..., R(A+B-1))
+		a, b, c := inst.ABC()
+		a += 1
 
+		nArgs := _preCall(a, b, vm)
+		vm.Call(nArgs, c-1)
+		_postCall(a, c, vm)
+	case OP_TAILCALL: // return R(A)(R(A+1), ..., R(A+B-1))
+		a, b, _ := inst.ABC()
+		a += 1
+
+		// TODO: optimize tail call!
+		nArgs := _preCall(a, b, vm)
+		vm.Call(nArgs, -1)
+		_postCall(a, 0, vm)
+	case OP_RETURN: // return R(A), ..., R(A+B-2)
+		a, b, _ := inst.ABC()
+		a += 1
+
+		nResults := b - 1
+		if nResults < 0 {
+			_fixStack(a, vm)
+		} else { // b-1 return values
+			vm.CheckStack(nResults)
+			for i := 0; i < nResults; i++ {
+				vm.PushValue(a + i)
+			}
+		}
 	case OP_FORLOOP: // R(A) += R(A+2); if R(A) <?= R(A+1) then { pc += sBx; R(A+3) := R(A) }
 		a, sbx := inst.AsBx()
 		a += 1
@@ -236,12 +271,43 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		} else {
 			c = Instruction(vm.Fetch()).Ax()
 		}
+		var n int
+		if b == 0 {
+			x := int(vm.ToInteger(-1))
+			vm.Pop(1)
+			n = x - a - 1
+		} else {
+			n = b
+		}
+		vm.CheckStack(1)
 		idx := c * LFIELDS_PER_FLUSH
-		for i := 1; i <= b; i++ {
+		for i := 1; i <= n; i++ {
 			vm.PushValue(a + i)
 			vm.SetI(a, int64(idx+i))
 		}
+		if b == 0 {
+			r := vm.RegisterCount()
+			m := vm.GetTop() - r
+			for i := 1; i <= m; i++ {
+				vm.PushValue(r + i)
+				vm.SetI(a, int64(idx+n+i))
+			}
+			vm.SetTop(r) // clear stack
+		}
+	case OP_CLOSURE: // R(A) := closure(KPROTO[Bx])
+		a, bx := inst.ABx()
+		a += 1
 
+		vm.LoadProto(bx)
+		vm.Replace(a)
+	case OP_VARARG: // R(A), ..., R(A+B-2) := vararg
+		a, b, _ := inst.ABC()
+		a += 1
+
+		if b != 1 {
+			vm.LoadVararg(b - 1)
+			_postCall(a, b, vm)
+		}
 	default:
 		panic(inst.Name())
 	}
@@ -286,5 +352,43 @@ func _getRK(vm api.LuaVM, idx int) {
 		vm.GetConst(idx & 0xff)
 	} else {
 		vm.PushValue(idx + 1)
+	}
+}
+
+func _fixStack(a int, vm api.LuaVM) int {
+	x := int(vm.ToInteger(-1))
+	vm.Pop(1)
+
+	n := x - a
+	vm.CheckStack(n)
+	for i := 0; i < n; i++ {
+		vm.PushValue(a + i)
+	}
+
+	r := vm.RegisterCount()
+	vm.Rotate(r+1, n)
+
+	return vm.GetTop() - r
+}
+
+func _preCall(a, b int, vm api.LuaVM) int {
+	if b > 0 { // b-1 args
+		vm.CheckStack(b)
+		for i := 0; i < b; i++ {
+			vm.PushValue(a + i)
+		}
+		return b - 1
+	}
+	return _fixStack(a, vm) - 1
+}
+
+func _postCall(a, c int, vm api.LuaVM) {
+	if c == 0 {
+		vm.CheckStack(1)
+		vm.PushInteger(int64(a))
+	} else {
+		for i := c - 2; i >= 0; i-- {
+			vm.Replace(a + i)
+		}
 	}
 }

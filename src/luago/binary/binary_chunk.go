@@ -37,7 +37,7 @@ type Prototype struct {
 	LineBegin    uint32
 	LineEnd      uint32
 	NumParams    byte
-	IsVararg     bool
+	IsVararg     byte
 	MaxStackSize byte
 	Code         []uint32
 	Constants    []interface{}

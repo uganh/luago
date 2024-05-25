@@ -89,7 +89,7 @@ func (self *reader) readProto(parentSource string) *Prototype {
 		LineBegin:    self.readUint32(),
 		LineEnd:      self.readUint32(),
 		NumParams:    self.readByte(),
-		IsVararg:     self.readByte() != 0,
+		IsVararg:     self.readByte(),
 		MaxStackSize: self.readByte(),
 	}
 
