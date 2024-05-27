@@ -9,141 +9,141 @@ type reader struct {
 	data []byte
 }
 
-func (self *reader) readByte() byte {
-	b := self.data[0]
-	self.data = self.data[1:]
+func (reader *reader) readByte() byte {
+	b := reader.data[0]
+	reader.data = reader.data[1:]
 	return b
 }
 
-func (self *reader) readUint32() uint32 {
-	i := binary.LittleEndian.Uint32(self.data)
-	self.data = self.data[4:]
+func (reader *reader) readUint32() uint32 {
+	i := binary.LittleEndian.Uint32(reader.data)
+	reader.data = reader.data[4:]
 	return i
 }
 
-func (self *reader) readUint64() uint64 {
-	i := binary.LittleEndian.Uint64(self.data)
-	self.data = self.data[8:]
+func (reader *reader) readUint64() uint64 {
+	i := binary.LittleEndian.Uint64(reader.data)
+	reader.data = reader.data[8:]
 	return i
 }
 
-func (self *reader) readLuaInteger() int64 {
-	return int64(self.readUint64())
+func (reader *reader) readLuaInteger() int64 {
+	return int64(reader.readUint64())
 }
 
-func (self *reader) readLuaNumber() float64 {
-	return math.Float64frombits(self.readUint64())
+func (reader *reader) readLuaNumber() float64 {
+	return math.Float64frombits(reader.readUint64())
 }
 
-func (self *reader) readString() string {
-	n := uint64(self.readByte())
+func (reader *reader) readString() string {
+	n := uint64(reader.readByte())
 	if n == 0 {
 		return ""
 	}
 	if n == 0xff {
-		n = self.readUint64()
+		n = reader.readUint64()
 	}
-	return string(self.readBytes(n - 1))
+	return string(reader.readBytes(n - 1))
 }
 
-func (self *reader) readBytes(n uint64) []byte {
-	bytes := self.data[:n]
-	self.data = self.data[n:]
+func (reader *reader) readBytes(n uint64) []byte {
+	bytes := reader.data[:n]
+	reader.data = reader.data[n:]
 	return bytes
 }
 
-func (self *reader) checkHeader() {
-	if string(self.readBytes(4)) != LUA_SIGNATURE {
+func (reader *reader) checkHeader() {
+	if string(reader.readBytes(4)) != LUA_SIGNATURE {
 		panic("not a precompiled chunk")
-	} else if self.readByte() != LUAC_VERSION {
+	} else if reader.readByte() != LUAC_VERSION {
 		panic("version mismatch")
-	} else if self.readByte() != LUAC_FORMAT {
+	} else if reader.readByte() != LUAC_FORMAT {
 		panic("format mismatch")
-	} else if string(self.readBytes(6)) != LUAC_DATA {
+	} else if string(reader.readBytes(6)) != LUAC_DATA {
 		panic("corrupted")
-	} else if self.readByte() != CINT_SIZE {
+	} else if reader.readByte() != CINT_SIZE {
 		panic("int size missmatch")
-	} else if self.readByte() != CSIZET_SIZE {
+	} else if reader.readByte() != CSIZET_SIZE {
 		panic("size_t size missmatch")
-	} else if self.readByte() != INSTRUCTION_SIZE {
+	} else if reader.readByte() != INSTRUCTION_SIZE {
 		panic("instruction size missmatch")
-	} else if self.readByte() != LUA_INTEGER_SIZE {
+	} else if reader.readByte() != LUA_INTEGER_SIZE {
 		panic("lua_Integer size missmatch")
-	} else if self.readByte() != LUA_NUMBER_SIZE {
+	} else if reader.readByte() != LUA_NUMBER_SIZE {
 		panic("lua_Number size missmatch")
-	} else if self.readLuaInteger() != LUAC_INT {
+	} else if reader.readLuaInteger() != LUAC_INT {
 		panic("endianness missmatch")
-	} else if self.readLuaNumber() != LUAC_NUM {
+	} else if reader.readLuaNumber() != LUAC_NUM {
 		panic("float format missmatch")
 	}
 }
 
-func (self *reader) readProto(parentSource string) *Prototype {
-	source := self.readString()
+func (reader *reader) readProto(parentSource string) *Prototype {
+	source := reader.readString()
 	if source == "" {
 		source = parentSource
 	}
 
 	proto := Prototype{
 		Source:       source,
-		LineBegin:    self.readUint32(),
-		LineEnd:      self.readUint32(),
-		NumParams:    self.readByte(),
-		IsVararg:     self.readByte(),
-		MaxStackSize: self.readByte(),
+		LineBegin:    reader.readUint32(),
+		LineEnd:      reader.readUint32(),
+		NumParams:    reader.readByte(),
+		IsVararg:     reader.readByte(),
+		MaxStackSize: reader.readByte(),
 	}
 
-	proto.Code = make([]uint32, self.readUint32())
+	proto.Code = make([]uint32, reader.readUint32())
 	for i := range proto.Code {
-		proto.Code[i] = self.readUint32()
+		proto.Code[i] = reader.readUint32()
 	}
 
-	proto.Constants = make([]interface{}, self.readUint32())
+	proto.Constants = make([]interface{}, reader.readUint32())
 	for i := range proto.Constants {
-		switch self.readByte() {
+		switch reader.readByte() {
 		case TAG_NIL:
 			proto.Constants[i] = nil
 		case TAG_BOOLEAN:
-			proto.Constants[i] = self.readByte() != 0
+			proto.Constants[i] = reader.readByte() != 0
 		case TAG_NUMBER:
-			proto.Constants[i] = self.readLuaNumber()
+			proto.Constants[i] = reader.readLuaNumber()
 		case TAG_INTEGER:
-			proto.Constants[i] = self.readLuaInteger()
+			proto.Constants[i] = reader.readLuaInteger()
 		case TAG_SHORT_STRING, TAG_LONG_STRING:
-			proto.Constants[i] = self.readString()
+			proto.Constants[i] = reader.readString()
 		}
 	}
 
-	proto.Upvalues = make([]Upvalue, self.readUint32())
+	proto.Upvalues = make([]Upvalue, reader.readUint32())
 	for i := range proto.Upvalues {
 		proto.Upvalues[i] = Upvalue{
-			InStack: self.readByte(),
-			Index:   self.readByte(),
+			InStack: reader.readByte(),
+			Index:   reader.readByte(),
 		}
 	}
 
-	proto.Protos = make([]*Prototype, self.readUint32())
+	proto.Protos = make([]*Prototype, reader.readUint32())
 	for i := range proto.Protos {
-		proto.Protos[i] = self.readProto(source)
+		proto.Protos[i] = reader.readProto(source)
 	}
 
-	proto.LineInfo = make([]uint32, self.readUint32())
+	proto.LineInfo = make([]uint32, reader.readUint32())
 	for i := range proto.LineInfo {
-		proto.LineInfo[i] = self.readUint32()
+		proto.LineInfo[i] = reader.readUint32()
 	}
 
-	proto.LocVars = make([]LocVar, self.readUint32())
+	proto.LocVars = make([]LocVar, reader.readUint32())
 	for i := range proto.LocVars {
 		proto.LocVars[i] = LocVar{
-			VarName: self.readString(),
-			StartPC: self.readUint32(),
-			EndPC:   self.readUint32(),
+			VarName: reader.readString(),
+			StartPC: reader.readUint32(),
+			EndPC:   reader.readUint32(),
 		}
 	}
 
-	proto.UpvalueNames = make([]string, self.readUint32())
+	proto.UpvalueNames = make([]string, reader.readUint32())
 	for i := range proto.UpvalueNames {
-		proto.UpvalueNames[i] = self.readString()
+		proto.UpvalueNames[i] = reader.readString()
 	}
 
 	return &proto

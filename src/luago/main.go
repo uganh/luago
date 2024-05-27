@@ -20,6 +20,8 @@ func main() {
 		ls.Register("next", next)
 		ls.Register("pairs", pairs)
 		ls.Register("ipairs", ipairs)
+		ls.Register("error", error_)
+		ls.Register("pcall", pcall)
 		ls.Load(data, os.Args[1], "b")
 		ls.Call(0, 0)
 	}
@@ -87,4 +89,15 @@ func ipairs(ls api.LuaState) int {
 	ls.PushValue(1)
 	ls.PushInteger(0)
 	return 3
+}
+
+func error_(ls api.LuaState) int {
+	return ls.Error()
+}
+
+func pcall(ls api.LuaState) int {
+	nArgs := ls.GetTop() - 1
+	ls.PushBoolean(ls.PCall(nArgs, -1, 0) == api.LUA_OK)
+	ls.Insert(1)
+	return ls.GetTop()
 }

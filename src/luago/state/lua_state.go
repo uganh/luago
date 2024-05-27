@@ -544,7 +544,7 @@ func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
 		c.upvals[0] = &upvalue{&val}
 	}
 	state.stack.push(c)
-	return 0
+	return api.LUA_OK
 }
 
 func (state *luaState) Call(nArgs, nResults int) {
@@ -571,6 +571,24 @@ func (state *luaState) Call(nArgs, nResults int) {
 	} else {
 		panic("not a function")
 	}
+}
+
+func (state *luaState) PCall(nArgs, nResults, msgh int) (status int) {
+	caller := state.stack
+	status = api.LUA_ERRRUN
+
+	defer func() {
+		if err := recover(); err != nil {
+			for state.stack != caller {
+				state.popLuaStack()
+			}
+			state.stack.push(err)
+		}
+	}()
+
+	state.Call(nArgs, nResults)
+	status = api.LUA_OK
+	return
 }
 
 func (state *luaState) Len(idx int) {
@@ -623,6 +641,10 @@ func (state *luaState) Next(idx int) bool {
 		return false
 	}
 	panic("table expected")
+}
+
+func (state *luaState) Error() int {
+	panic(state.stack.pop())
 }
 
 func (state *luaState) PC() int {
