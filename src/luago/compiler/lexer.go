@@ -75,10 +75,6 @@ var keywords = map[string]int{
 
 var reNumber = regexp.MustCompile(`^(0[Xx][:xdigit:]*(\.[:xdigit:]*)?([Pp][+\-]?\d+)?|\d*(\.\d*)?([Ee][+\-]?\d+)?)`)
 
-var reLongStringOpeningBracket = regexp.MustCompile(`^\[=*\]`)
-
-var reNewLine = regexp.MustCompile(`\n|\n\r|\r|\r\n`)
-
 type Lexer struct {
 	chunk     string
 	chunkName string
@@ -95,101 +91,50 @@ func NewLexer(chunk, chunkName string) *Lexer {
 
 func (lexer *Lexer) Lex() (line, kind int, token string) {
 	for {
-		if len(lexer.chunk) == 0 {
-			return lexer.line, TOKEN_EOF, ""
-		}
-
 		switch char := lexer.peek(); char {
-		case '\t':
+		case eoz:
+			return lexer.line, TOKEN_EOF, ""
+		case '\n', '\r': // line breaks
+			lexer.incLine(char)
+		case '\t', '\v', '\f', ' ': // spaces
 			lexer.skip(1)
-		case '\n':
-			if lexer.test("\n\r") {
-				lexer.skip(2)
-			} else {
-				lexer.skip(1)
-			}
-			lexer.line++
-		case '\v', '\f':
-			lexer.skip(1)
-		case '\r':
-			if lexer.test("\r\n") {
-				lexer.skip(2)
-			} else {
-				lexer.skip(1)
-			}
-			lexer.line++
-		case ' ':
-			lexer.skip(1)
-		case '"':
-			return lexer.line, TOKEN_STRING, lexer.scanShortString()
-		case '#':
-			return lexer.takeChar()
-		case '%':
-			return lexer.takeChar()
-		case '&':
-			return lexer.takeChar()
-		case '\'':
-			return lexer.line, TOKEN_STRING, lexer.scanShortString()
-		case '(':
-			return lexer.takeChar()
-		case ')':
-			return lexer.takeChar()
-		case '*':
-			return lexer.takeChar()
-		case '+':
-			return lexer.takeChar()
-		case ',':
-			return lexer.takeChar()
-		case '-':
-			if lexer.test("--") {
-				lexer.skip(2)
+		case '-': // '-' or '--' (comment)
+			lexer.skip(1) // skip '-'
+			if lexer.peek() == '-' {
+				lexer.skip(1) // skip '-'
 
-				// long comment
-				if openingBracket := reLongStringOpeningBracket.FindString(lexer.chunk); openingBracket != "" {
-					lexer.scanLongString(openingBracket, "comment")
-					continue
+				if lexer.peek() == '[' { // long comment?
+					sep := lexer.scanSep()
+					if lexer.peek() == '[' {
+						lexer.readLongString(sep, "comment")
+					}
 				}
 
 				// short comment
-				for len(lexer.chunk) > 0 && lexer.chunk[0] != '\n' || lexer.chunk[0] != '\r' {
+				for char := lexer.peek(); char == '\n' || char == '\r'; char = lexer.peek() {
 					lexer.skip(1)
 				}
 			} else {
-				return lexer.takeChar()
+				return lexer.line, '-', "-"
 			}
-		case '.':
-			if lexer.test("...") {
-				return lexer.take(3, TOKEN_VARARG)
-			} else if lexer.test("..") {
-				return lexer.take(2, TOKEN_CONCAT)
-			} else if len(lexer.chunk) > 1 && isDigit(int(lexer.chunk[1])) {
-				return lexer.line, TOKEN_NUMBER, lexer.scanNumber()
+		case '[':
+			sep := lexer.scanSep()
+			if lexer.peek() == '[' {
+				return lexer.line, TOKEN_STRING, lexer.readLongString(sep, "string")
+			} else if sep > 0 {
+				lexer.error("invalid long string delimiter")
 			} else {
-				return lexer.takeChar()
-			}
-		case '/':
-			if lexer.test("//") {
-				return lexer.take(2, TOKEN_IDIV)
-			} else {
-				return lexer.takeChar()
-			}
-		case ':':
-			if lexer.test("::") {
-				return lexer.take(2, TOKEN_LABEL)
-			} else {
-				return lexer.takeChar()
-			}
-		case ';':
-			return lexer.takeChar()
-		case '<':
-			if lexer.test("<=") {
-				return lexer.take(2, TOKEN_LE)
-			} else {
-				return lexer.takeChar()
+				return lexer.line, '[', "["
 			}
 		case '=':
 			if lexer.test("==") {
 				return lexer.take(2, TOKEN_EQ)
+			} else {
+				return lexer.takeChar()
+			}
+		case '<':
+			if lexer.test("<=") {
+				return lexer.take(2, TOKEN_LE)
 			} else {
 				return lexer.takeChar()
 			}
@@ -199,32 +144,42 @@ func (lexer *Lexer) Lex() (line, kind int, token string) {
 			} else {
 				return lexer.takeChar()
 			}
-		case '[':
-			if openingBracket := reLongStringOpeningBracket.FindString(lexer.chunk); openingBracket != "" {
-				return lexer.line, TOKEN_STRING, lexer.scanLongString(openingBracket, "string")
+		case '/':
+			if lexer.test("//") {
+				return lexer.take(2, TOKEN_IDIV)
 			} else {
 				return lexer.takeChar()
 			}
-		case ']':
-			return lexer.takeChar()
-		case '^':
-			return lexer.takeChar()
-		case '{':
-			return lexer.takeChar()
-		case '|':
-			return lexer.takeChar()
-		case '}':
-			return lexer.takeChar()
 		case '~':
 			if lexer.test("~=") {
 				return lexer.take(2, TOKEN_NE)
 			} else {
 				return lexer.takeChar()
 			}
+		case ':':
+			if lexer.test("::") {
+				return lexer.take(2, TOKEN_LABEL)
+			} else {
+				return lexer.takeChar()
+			}
+		case '"', '\'': // short literal strings
+			return lexer.line, TOKEN_STRING, lexer.readShortString()
+		case '.':
+			if lexer.test("...") {
+				return lexer.take(3, TOKEN_VARARG)
+			} else if lexer.test("..") {
+				return lexer.take(2, TOKEN_CONCAT)
+			} else if len(lexer.chunk) > 1 && isDigit(int(lexer.chunk[0])) {
+				return lexer.line, TOKEN_NUMBER, lexer.readNumeral()
+			} else {
+				return lexer.takeChar()
+			}
 		default:
 			if isDigit(char) {
-				return lexer.line, TOKEN_NUMBER, lexer.scanNumber()
-			} else if isAlpha(char) || char == '_' {
+				return lexer.line, TOKEN_NUMBER, lexer.readNumeral()
+			}
+
+			if isAlpha(char) || char == '_' {
 				n := 1
 				for n < len(lexer.chunk) && isIdent(int(lexer.chunk[n])) {
 					n++
@@ -238,6 +193,8 @@ func (lexer *Lexer) Lex() (line, kind int, token string) {
 					return lexer.line, TOKEN_IDENTIFIER, token
 				}
 			}
+
+			return lexer.takeChar()
 		}
 	}
 }
@@ -274,17 +231,32 @@ func (lexer *Lexer) takeChar() (line, kind int, token string) {
 	return
 }
 
+func (lexer *Lexer) incLine(oldChar int) {
+	lexer.skip(1) // skip '\n' or '\r'
+	switch oldChar {
+	case '\n':
+		if lexer.peek() == '\r' {
+			lexer.skip(1) // skip '\n\r'
+		}
+	case '\r':
+		if lexer.peek() == '\n' {
+			lexer.skip(1) // skip '\r\n'
+		}
+	}
+	lexer.line++
+}
+
 func (lexer *Lexer) error(f string, a ...interface{}) {
 	panic(fmt.Sprintf("%s:%d: %s", lexer.chunkName, lexer.line, fmt.Sprintf(f, a...)))
 }
 
-func (lexer *Lexer) scanNumber() string {
+func (lexer *Lexer) readNumeral() string {
 	token := reNumber.FindString(lexer.chunk)
 	lexer.skip(len(token))
 	return token
 }
 
-func (lexer *Lexer) scanShortString() string {
+func (lexer *Lexer) readShortString() string {
 	var buf bytes.Buffer
 	var del = lexer.peek(); lexer.skip(1)
 
@@ -427,23 +399,45 @@ func (lexer *Lexer) scanShortString() string {
 	}
 }
 
-func (lexer *Lexer) scanLongString(openingBracket string, what string) string {
-	closingBracket := strings.ReplaceAll(openingBracket, "[", "]")
-	closingBracketOffset := strings.Index(lexer.chunk, closingBracket)
-	if closingBracketOffset < 0 {
-		lexer.error("unfinished long %s (starting at line %d)", what, lexer.line)
+func (lexer *Lexer) readLongString(headSep int, what string) string {
+	line := lexer.line
+
+	lexer.skip(1) // skip 2nd '['
+	if char := lexer.peek(); char == '\n' || char == '\r' { // string starts with a newline?
+		lexer.incLine(char)
 	}
 
-	str := lexer.chunk[len(openingBracket): closingBracketOffset]
-	lexer.skip(closingBracketOffset + len(closingBracket))
+	var buf bytes.Buffer
 
-	str = reNewLine.ReplaceAllString(str, "\n")
-	lexer.line += strings.Count(str, "\n")
-	if len(str) > 0 && str[0] == '\n' {
-		str = str[1:]
+	for {
+		switch char := lexer.peek(); char {
+		case eoz:
+			lexer.error("unfinished long %s (starting at line %d)", what, line)
+		case ']':
+			if tailSep := lexer.scanSep(); tailSep == headSep && lexer.peek() == ']' {
+				lexer.skip(1) // skip 2nd ']'
+				return buf.String()
+			} else {
+				buf.WriteByte(']')
+				buf.WriteString(strings.Repeat("=", tailSep))
+			}
+		case '\n', '\r':
+			buf.WriteByte('\n')
+			lexer.incLine(char)
+		default:
+			buf.WriteByte(byte(char))
+		}
 	}
+}
 
-	return str
+func (lexer *Lexer) scanSep() int {
+	lexer.skip(1) // skip '[' or ']'
+	sep := 0
+	for lexer.peek() == '=' {
+		lexer.skip(1)
+		sep++
+	}
+	return sep
 }
 
 func isAlpha(char int) bool {
