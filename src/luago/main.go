@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"luago/compiler"
 	"os"
@@ -14,29 +15,11 @@ func main() {
 			panic(err)
 		}
 
-		lexer := compiler.NewLexer(string(chunk), chunkName)
-		for {
-			line, kind, token := lexer.Lex()
-
-			fmt.Printf("[%2d] ", line)
-			switch {
-			case kind == compiler.TOKEN_EOF:
-				fmt.Printf("end of file\n")
-			case kind <= compiler.TOKEN_WHILE:
-				fmt.Printf("%s\n", token)
-			case kind == compiler.TOKEN_IDENTIFIER:
-				fmt.Printf("identifier %s\n", token)
-			case kind == compiler.TOKEN_NUMBER:
-				fmt.Printf("number %s\n", token)
-			case kind == compiler.TOKEN_STRING:
-				fmt.Printf("string %q\n", token)
-			default:
-				fmt.Printf("'%s'\n", token)
-			}
-
-			if kind == compiler.TOKEN_EOF {
-				break
-			}
+		ast := compiler.Parse(string(chunk), chunkName)
+		val, err := json.Marshal(ast)
+		if err != nil {
+			panic(err)
 		}
+		fmt.Println(string(val))
 	}
 }

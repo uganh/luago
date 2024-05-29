@@ -8,42 +8,42 @@ import (
 )
 
 const (
-	TOKEN_EOF        = iota // end of file
-	TOKEN_VARARG            // ...
-	TOKEN_LABEL             // ::
-	TOKEN_IDIV              // //
-	TOKEN_SHR               // >>
-	TOKEN_SHL               // <<
-	TOKEN_CONCAT            // ..
-	TOKEN_LE                // <=
-	TOKEN_GE                // >=
-	TOKEN_EQ                // ==
-	TOKEN_NE                // ~=
-	TOKEN_AND               // and
-	TOKEN_BREAK             // break
-	TOKEN_DO                // do
-	TOKEN_ELSE              // else
-	TOKEN_ELSEIF            // elseif
-	TOKEN_END               // end
-	TOKEN_FALSE             // false
-	TOKEN_FOR               // for
-	TOKEN_FUNCTION          // function
-	TOKEN_GOTO              // goto
-	TOKEN_IF                // if
-	TOKEN_IN                // in
-	TOKEN_LOCAL             // local
-	TOKEN_NIL               // nil
-	TOKEN_NOT               // not
-	TOKEN_OR                // or
-	TOKEN_REPEAT            // repeat
-	TOKEN_RETURN            // return
-	TOKEN_THEN              // then
-	TOKEN_TRUE              // true
-	TOKEN_UNTIL             // until
-	TOKEN_WHILE             // while
-	TOKEN_IDENTIFIER        // identifier
-	TOKEN_NUMBER            // number literal
-	TOKEN_STRING            // string literal
+	TOKEN_EOF      = -1         // end of file
+	TOKEN_VARARG   = iota + 256 // ...
+	TOKEN_DBCOLON               // ::
+	TOKEN_IDIV                  // //
+	TOKEN_SHR                   // >>
+	TOKEN_SHL                   // <<
+	TOKEN_CONCAT                // ..
+	TOKEN_LE                    // <=
+	TOKEN_GE                    // >=
+	TOKEN_EQ                    // ==
+	TOKEN_NE                    // ~=
+	TOKEN_AND                   // and
+	TOKEN_BREAK                 // break
+	TOKEN_DO                    // do
+	TOKEN_ELSE                  // else
+	TOKEN_ELSEIF                // elseif
+	TOKEN_END                   // end
+	TOKEN_FALSE                 // false
+	TOKEN_FOR                   // for
+	TOKEN_FUNCTION              // function
+	TOKEN_GOTO                  // goto
+	TOKEN_IF                    // if
+	TOKEN_IN                    // in
+	TOKEN_LOCAL                 // local
+	TOKEN_NIL                   // nil
+	TOKEN_NOT                   // not
+	TOKEN_OR                    // or
+	TOKEN_REPEAT                // repeat
+	TOKEN_RETURN                // return
+	TOKEN_THEN                  // then
+	TOKEN_TRUE                  // true
+	TOKEN_UNTIL                 // until
+	TOKEN_WHILE                 // while
+	TOKEN_NAME                  // identifier
+	TOKEN_NUMBER                // number literal
+	TOKEN_STRING                // string literal
 )
 
 const eoz = -1
@@ -79,6 +79,11 @@ type Lexer struct {
 	chunk     string
 	chunkName string
 	line      int
+	LookAhead struct {
+		Line  int
+		Kind  int
+		Value string
+	}
 }
 
 func NewLexer(chunk, chunkName string) *Lexer {
@@ -89,7 +94,11 @@ func NewLexer(chunk, chunkName string) *Lexer {
 	}
 }
 
-func (lexer *Lexer) Lex() (line, kind int, token string) {
+func (lexer *Lexer) Next() {
+	lexer.LookAhead.Line, lexer.LookAhead.Kind, lexer.LookAhead.Value = lexer.lex()
+}
+
+func (lexer *Lexer) lex() (line, kind int, token string) {
 	for {
 		switch char := lexer.peek(); char {
 		case eoz:
@@ -158,7 +167,7 @@ func (lexer *Lexer) Lex() (line, kind int, token string) {
 			}
 		case ':':
 			if lexer.test("::") {
-				return lexer.take(2, TOKEN_LABEL)
+				return lexer.take(2, TOKEN_DBCOLON)
 			} else {
 				return lexer.takeChar()
 			}
@@ -190,7 +199,7 @@ func (lexer *Lexer) Lex() (line, kind int, token string) {
 				if kind, found := keywords[token]; found {
 					return lexer.line, kind, token
 				} else {
-					return lexer.line, TOKEN_IDENTIFIER, token
+					return lexer.line, TOKEN_NAME, token
 				}
 			}
 
@@ -258,7 +267,8 @@ func (lexer *Lexer) readNumeral() string {
 
 func (lexer *Lexer) readShortString() string {
 	var buf bytes.Buffer
-	var del = lexer.peek(); lexer.skip(1)
+	var del = lexer.peek()
+	lexer.skip(1)
 
 	for {
 		char := lexer.peek()
@@ -267,7 +277,7 @@ func (lexer *Lexer) readShortString() string {
 			return buf.String()
 		}
 
-		switch (char) {
+		switch char {
 		case eoz:
 			lexer.error("unfinished string")
 		case '\n', '\r':
@@ -276,17 +286,23 @@ func (lexer *Lexer) readShortString() string {
 			lexer.skip(1) // skip '\\'
 			switch char := lexer.peek(); char {
 			case 'a':
-				buf.WriteByte('\a'); lexer.skip(1)
+				buf.WriteByte('\a')
+				lexer.skip(1)
 			case 'b':
-				buf.WriteByte('\b'); lexer.skip(1)
+				buf.WriteByte('\b')
+				lexer.skip(1)
 			case 'f':
-				buf.WriteByte('\f'); lexer.skip(1)
+				buf.WriteByte('\f')
+				lexer.skip(1)
 			case 'n':
-				buf.WriteByte('\n'); lexer.skip(1)
+				buf.WriteByte('\n')
+				lexer.skip(1)
 			case 'r':
-				buf.WriteByte('\r'); lexer.skip(1)
+				buf.WriteByte('\r')
+				lexer.skip(1)
 			case 't':
-				buf.WriteByte('\t'); lexer.skip(1)
+				buf.WriteByte('\t')
+				lexer.skip(1)
 			case 'u': // \u{hhh}
 				lexer.skip(1) // skip 'u'
 				if lexer.peek() != '{' {
@@ -299,7 +315,7 @@ func (lexer *Lexer) readShortString() string {
 						c := lexer.peek()
 						if d, ok := toHex(c); ok {
 							lexer.skip(1)
-							r = r * 16 + d
+							r = r*16 + d
 							if r > 0x10ffff {
 								lexer.error("UTF-8 value too large")
 							}
@@ -314,14 +330,15 @@ func (lexer *Lexer) readShortString() string {
 					lexer.error("hexadecimal digit expected")
 				}
 			case 'v':
-				buf.WriteByte('\v'); lexer.skip(1)
+				buf.WriteByte('\v')
+				lexer.skip(1)
 			case 'x': // \xhh
 				lexer.skip(1) // skip 'x'
 				r := 0
 				for j := 0; j < 2; j++ {
 					if d, ok := toHex(lexer.peek()); ok {
 						lexer.skip(1)
-						r = r * 16 + d
+						r = r*16 + d
 					} else {
 						lexer.error("hexadecimal digit expected")
 					}
@@ -348,16 +365,16 @@ func (lexer *Lexer) readShortString() string {
 					}
 				}
 				switch c := lexer.peek(); c {
-					case '\t':
-						lexer.skip(1)
-					case '\n':
-					case '\v', '\f':
-						lexer.skip(1)
-					case '\r':
-					case ' ':
-					default:
-						break
-					}
+				case '\t':
+					lexer.skip(1)
+				case '\n':
+				case '\v', '\f':
+					lexer.skip(1)
+				case '\r':
+				case ' ':
+				default:
+					break
+				}
 			case '\n':
 				lexer.skip(1)
 				if lexer.peek() == '\r' {
@@ -371,13 +388,14 @@ func (lexer *Lexer) readShortString() string {
 				}
 				buf.WriteByte('\n')
 			case '"', '\'', '\\':
-				buf.WriteByte(byte(char)); lexer.skip(1)
+				buf.WriteByte(byte(char))
+				lexer.skip(1)
 			default:
 				if isDigit(char) { // '\ddd'
 					r := 0
 					for j := 0; j < 3; j++ {
 						if c := lexer.peek(); isDigit(char) {
-							r = 10 * r + int(c - '0')
+							r = 10*r + int(c-'0')
 							lexer.skip(1)
 						} else {
 							break
@@ -394,7 +412,8 @@ func (lexer *Lexer) readShortString() string {
 				}
 			}
 		default:
-			buf.WriteByte(byte(char)); lexer.skip(1)
+			buf.WriteByte(byte(char))
+			lexer.skip(1)
 		}
 	}
 }
@@ -402,7 +421,7 @@ func (lexer *Lexer) readShortString() string {
 func (lexer *Lexer) readLongString(headSep int, what string) string {
 	line := lexer.line
 
-	lexer.skip(1) // skip 2nd '['
+	lexer.skip(1)                                           // skip 2nd '['
 	if char := lexer.peek(); char == '\n' || char == '\r' { // string starts with a newline?
 		lexer.incLine(char)
 	}
@@ -454,8 +473,10 @@ func isIdent(char int) bool {
 
 func isSpace(char int) bool {
 	switch char {
-	case '\t', '\n', '\v', '\f', '\r', ' ': return true
-	default: return false
+	case '\t', '\n', '\v', '\f', '\r', ' ':
+		return true
+	default:
+		return false
 	}
 }
 
