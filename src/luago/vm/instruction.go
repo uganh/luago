@@ -4,6 +4,9 @@ import (
 	"luago/api"
 )
 
+const MAXARG_Bx = (1<<18) - 1
+const MAXARG_sBx = MAXARG_Bx >> 1
+
 const LFIELDS_PER_FLUSH = 50
 
 type Instruction uint32
@@ -27,7 +30,7 @@ func (inst Instruction) ABx() (a, bx int) {
 
 func (inst Instruction) AsBx() (a, sbx int) {
 	a = int((inst >> 6) & 0xff)
-	sbx = int(inst>>14) - (1 << 17) + 1
+	sbx = int(inst>>14) - MAXARG_sBx
 	return
 }
 
@@ -60,7 +63,6 @@ func (inst Instruction) Execute(vm api.LuaVM) {
 		b += 1
 
 		vm.Copy(b, a)
-
 	case OP_LOADK: // R(A) := Kst(Bx)
 		a, bx := inst.ABx()
 		a += 1

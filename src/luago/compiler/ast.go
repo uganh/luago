@@ -104,18 +104,18 @@ type FalseExpr struct {
 }
 
 type IntegerExpr struct {
-	Line  int
-	Value int
+	Line int
+	Val  int
 }
 
 type FloatExpr struct {
-	Line  int
-	Value float64
+	Line int
+	Val  float64
 }
 
 type StringExpr struct {
-	Line  int
-	Value string
+	Line int
+	Str  string
 }
 
 type NameExpr struct {

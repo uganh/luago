@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"luago/api"
 	"luago/binary"
+	"luago/compiler"
 	"luago/number"
 	"luago/vm"
 	"math"
@@ -537,7 +538,12 @@ func (state *luaState) Register(name string, f api.GoFunction) {
 }
 
 func (state *luaState) Load(chunk []byte, chunkName, mode string) int {
-	proto := binary.Parse(chunk)
+	var proto *binary.Prototype
+	if binary.IsBinaryChunk(chunk) {
+		proto = binary.Parse(chunk)
+	} else {
+		proto = compiler.Compile(string(chunk), chunkName)
+	}
 	c := newLuaClosure(proto)
 	if len(proto.Upvalues) > 0 {
 		val := state.registry.get(api.LUA_RIDX_GLOBALS) // `_ENV`
